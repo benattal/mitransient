@@ -3,7 +3,9 @@ from typing import Optional, Tuple, List, Callable, Any
 
 import drjit as dr
 import mitsuba as mi
+import numpy as np
 from mitsuba.ad.integrators.common import mis_weight  # type: ignore
+
 
 from .common import TransientADIntegrator
 
@@ -103,19 +105,129 @@ class TransientPath(TransientADIntegrator):
         self.use_confocal_light_source = props.get("use_confocal_light_source", True)
         self.use_nlos_only = props.get("use_nlos_only", True)
 
+        # Storage for projector emitter and precomputed data
+        self.projector_emitter = None
+        self.projector_pmf = None
+        self.projector_cdf = None
+        self.projector_width = None
+        self.projector_height = None
+        self.projector_fov = None
+        self.projector_texture_data = None  # Store the full texture for querying
+
+    def prepare_projector(self, scene: mi.Scene):
+        """
+        Extract projector emitter information and precompute sampling data.
+        """
+        # Find the projector emitter (assumed to be the first emitter)
+        emitters = scene.emitters()
+        if len(emitters) == 0:
+            return
+
+        self.projector_emitter = emitters[0]
+
+        # Check if it's actually a projector
+        if self.projector_emitter.class_name() != "Projector":
+            return
+
+        # Access texture data through scene parameters
+        params = mi.traverse(scene)
+
+        # Extract texture data
+        try:
+            texture_data = params['light.irradiance.data']
+            self.projector_height, self.projector_width = texture_data.shape[0], texture_data.shape[1]
+
+            # Store the texture data for later querying
+            self.projector_texture_data = texture_data
+
+            # Convert to numpy for PMF/CDF computation
+            texture_np = texture_data.numpy().reshape(self.projector_height, self.projector_width, 3)
+
+            # Compute PMF from first channel (assuming grayscale or uniform RGB)
+            intensities = texture_np[:, :, 0]
+            total_intensity = np.sum(intensities)
+
+            if total_intensity > 0:
+                self.projector_pmf = intensities / total_intensity
+                # Flatten and compute CDF for sampling
+                pmf_flat = self.projector_pmf.flatten()
+                self.projector_cdf = np.cumsum(pmf_flat)
+
+            # Extract FOV
+            self.projector_fov = params.get('light.x_fov', 0.2)  # Default to 0.2 if not found
+
+        except Exception as e:
+            print(f"Warning: Could not extract projector data: {e}")
+            self.projector_emitter = None
+
+    def query_projector_texture(self,
+                                 pixel_x: mi.Float,
+                                 pixel_y: mi.Float,
+                                 subpixel_offset_x: mi.Float,
+                                 subpixel_offset_y: mi.Float) -> mi.Spectrum:
+        """
+        Query the projector texture at sub-pixel coordinates using bilinear interpolation.
+
+        Args:
+            pixel_x: Integer pixel x coordinate
+            pixel_y: Integer pixel y coordinate
+            subpixel_offset_x: Fractional offset within pixel [0, 1] in x direction
+            subpixel_offset_y: Fractional offset within pixel [0, 1] in y direction
+
+        Returns:
+            RGB spectrum value at the interpolated position
+        """
+        # Convert sub-pixel coordinates to texture indices
+        tex_x = pixel_x + subpixel_offset_x
+        tex_y = pixel_y + subpixel_offset_y
+
+        # Clamp to valid texture coordinates
+        tex_x = dr.clip(tex_x, 0, self.projector_width - 1)
+        tex_y = dr.clip(tex_y, 0, self.projector_height - 1)
+
+        # Get floor and fractional parts for bilinear interpolation
+        tex_x_floor = mi.Int32(dr.floor(tex_x))
+        tex_y_floor = mi.Int32(dr.floor(tex_y))
+        tex_x_frac = tex_x - mi.Float(tex_x_floor)
+        tex_y_frac = tex_y - mi.Float(tex_y_floor)
+
+        # Clamp neighboring pixel coordinates
+        tex_x_ceil = mi.Int32(dr.minimum(tex_x_floor + 1, self.projector_width - 1))
+        tex_y_ceil = mi.Int32(dr.minimum(tex_y_floor + 1, self.projector_height - 1))
+
+        # Bilinear interpolation weights
+        w_00 = (1 - tex_x_frac) * (1 - tex_y_frac)
+        w_10 = tex_x_frac * (1 - tex_y_frac)
+        w_01 = (1 - tex_x_frac) * tex_y_frac
+        w_11 = tex_x_frac * tex_y_frac
+
+        # Use simple indexing to access texture values
+        # texture_data shape: (height, width, 3)
+        rgb_00 = self.projector_texture_data[tex_y_floor, tex_x_floor, :]
+        rgb_10 = self.projector_texture_data[tex_y_floor, tex_x_ceil, :]
+        rgb_01 = self.projector_texture_data[tex_y_ceil, tex_x_floor, :]
+        rgb_11 = self.projector_texture_data[tex_y_ceil, tex_x_ceil, :]
+
+        # Interpolate RGB channels
+        rgb = w_00 * rgb_00 + w_10 * rgb_10 + w_01 * rgb_01 + w_11 * rgb_11
+
+        return mi.Spectrum(rgb)
+
     def sample_emitter(self,
                        scene: mi.Scene,
                        si: mi.SurfaceInteraction3f,
                        initial_intersection_point: mi.Point3f,
                        active: mi.Bool,
                        si_initial: mi.SurfaceInteraction3f = None,
-                       camera_origin: mi.Point3f = None) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
+                       camera_origin: mi.Point3f = None,
+                       camera_ray_direction: mi.Vector3f = None,
+                       sampler: mi.Sampler = None) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
         """
-        Custom emitter sampling that samples the direction from the current point
-        to the intersection of the initial camera ray with the scene geometry.
+        Custom emitter sampling that uses a projector pattern aligned with the camera ray.
 
-        This is useful for NLOS-type setups where we want to treat the initial
-        intersection point as a light source.
+        If a projector emitter is configured, this samples a pixel from the projector
+        based on its intensity PMF, transforms it to align with the camera ray, and
+        computes the radiance contribution from that point.
 
         Args:
             scene: The scene
@@ -123,10 +235,214 @@ class TransientPath(TransientADIntegrator):
             initial_intersection_point: The intersection point of the initial camera ray
             active: Active mask
             si_initial: Surface interaction at the initial intersection point
+            camera_origin: Camera origin point
+            camera_ray_direction: Initial camera ray direction
+            sampler: Sampler for random numbers
 
         Returns:
-            ds: Direction sample toward the initial intersection point
-            em_weight: Weight of this sample including BRDF at initial point and inverse square falloff
+            ds: Direction sample toward the sampled projector point
+            em_weight: Weight of this sample including BRDF, radiance, and PDF
+        """
+        # Check if we have a projector configured
+        if self.projector_emitter is None or self.projector_pmf is None or sampler is None:
+            # Fall back to original confocal behavior
+            return self.sample_emitter_confocal(scene, si, initial_intersection_point, active, si_initial)
+
+        # Initialize output
+        ds = dr.zeros(mi.DirectionSample3f)
+        em_weight = mi.Spectrum(0.0)
+
+        # Sample a projector pixel using the intensity PMF
+        # We need to use DrJit-compatible sampling here
+        # Use discrete distribution sampling with precomputed CDF
+
+        # Get a uniform random sample - this is a DrJit array
+        u = sampler.next_1d()
+
+        # Convert CDF to DrJit array
+        cdf_dr = mi.Float(self.projector_cdf)
+
+        # Binary search in CDF - use DrJit searchsorted equivalent
+        # For now, use a simple approach: evaluate the CDF at index positions
+        num_pixels = self.projector_width * self.projector_height
+        pixel_idx = dr.binary_search(
+            0, num_pixels - 1,
+            lambda idx: dr.gather(mi.Float, cdf_dr, idx) < u
+        )
+
+        # Clamp to valid range
+        pixel_idx = dr.clip(pixel_idx, 0, num_pixels - 1)
+
+        # Convert to x, y coordinates
+        pixel_y = pixel_idx // self.projector_width
+        pixel_x = pixel_idx % self.projector_width
+
+        # Get the PMF value for this pixel - use dr.gather to index into PMF array
+        pmf_flat_dr = mi.Float(self.projector_pmf.flatten())
+        pixel_pmf = dr.gather(mi.Float, pmf_flat_dr, pixel_idx)
+
+        # Sub-pixel sampling: sample a random position within the pixel
+        # Get two random samples for x and y offset within the pixel
+        subpixel_offset_x = sampler.next_1d()  # Random value in [0, 1]
+        subpixel_offset_y = sampler.next_1d()  # Random value in [0, 1]
+
+        # Convert pixel coordinates to normalized coordinates [-1, 1]
+        # Use subpixel_offset instead of 0.5 for random position within pixel
+        normalized_x = 2.0 * (pixel_x + subpixel_offset_x) / self.projector_width - 1.0
+        normalized_y = 2.0 * (pixel_y + subpixel_offset_y) / self.projector_height - 1.0
+
+        # Compute direction in projector local space
+        tan_half_fov = dr.tan(self.projector_fov / 2.0)
+        dir_x = tan_half_fov * normalized_x
+        dir_y = tan_half_fov * normalized_y
+        dir_z = -1.0
+
+        direction_local = mi.Vector3f(dir_x, dir_y, dir_z)
+        direction_local = dr.normalize(direction_local)
+
+        # Build projector_to_world transform that aligns:
+        # - Center pixel with the primary camera ray direction
+        # - Origin with camera origin
+        # - Up direction with camera up ([0, 1, 0])
+
+        # Camera forward direction (initial ray direction)
+        camera_forward = dr.normalize(camera_ray_direction)
+
+        # Camera up direction
+        camera_up = mi.Vector3f(0.0, 1.0, 0.0)
+
+        # Build right direction (perpendicular to forward and up)
+        camera_right = dr.normalize(dr.cross(camera_forward, camera_up))
+
+        # Recompute up to be orthogonal
+        camera_up = dr.normalize(dr.cross(camera_right, camera_forward))
+
+        # Build rotation matrix: columns are [right, up, -forward]
+        # Note: We use -forward because projector local space has z=-1 pointing into scene
+        projector_to_world_rotation = mi.Matrix3f(
+            camera_right,
+            camera_up,
+            -camera_forward
+        )
+
+        # Transform the sampled direction to world space
+        # direction_world = projector_to_world_rotation @ direction_local
+
+        # NOTE: Remove
+        direction_world = initial_intersection_point - camera_origin
+        direction_world = dr.normalize(direction_world)
+
+        # Origin is at camera position
+        origin_world = camera_origin
+
+        # Cast ray from projector origin in sampled direction to find intersection
+        projector_ray = mi.Ray3f(origin_world, direction_world)
+        si_projector = scene.ray_intersect(projector_ray, mi.Bool(True))
+
+        # # TODO: Remove
+        # si_projector = si_initial
+
+        # Check if we hit something
+        is_valid = mi.Bool(True)
+
+        # Intersection point
+        # intersection_point = si_projector.p
+
+        # NOTE: Remove
+        intersection_point = initial_intersection_point 
+
+        # Direction from current vertex to intersection point
+        to_light = intersection_point - si.p
+        dist = dr.norm(to_light)
+        to_light_normalized = dr.normalize(to_light)
+
+        # Check visibility from current point to intersection
+        epsilon_bump = 1e-4
+        shadow_ray = mi.Ray3f(si.p + to_light_normalized * epsilon_bump, to_light_normalized)
+        si_shadow = scene.ray_intersect(shadow_ray, is_valid)
+
+        epsilon = 1e-4
+        is_visible = (dr.norm(si_shadow.p - intersection_point) < epsilon)
+
+        # Get the BSDF at the projector intersection point
+        bsdf_projector = si_projector.bsdf()
+
+        # Outgoing direction at intersection (toward current vertex)
+        wo_projector = si_projector.to_local(-to_light_normalized)
+
+        # Evaluate BRDF at the intersection point
+        bsdf_ctx = mi.BSDFContext()
+        bsdf_value_projector = bsdf_projector.eval(bsdf_ctx, si_projector, wo_projector, is_valid)
+        bsdf_value_projector = si_projector.to_world_mueller(bsdf_value_projector, -wo_projector, si_projector.wi)
+
+        # Get projector radiance (from texture intensity)
+        # Query the texture at the sub-pixel coordinates using bilinear interpolation
+        # projector_radiance = self.query_projector_texture(
+        #     pixel_x, pixel_y, subpixel_offset_x, subpixel_offset_y
+        # )
+        # projector_radiance = (pixel_pmf * self.projector_width * self.projector_height)
+
+        # NOTE: Remove
+        projector_radiance = 1.0
+
+        # Compute sampling PDF:
+        # pdf_projector_pixel = pixel_pmf (probability of sampling this pixel)
+        # We need to convert from projector solid angle to area to solid angle at current vertex
+
+        # Differential solid angle in projector space per pixel
+        pixel_area_normalized = (2.0 / self.projector_width) * (2.0 / self.projector_height)
+        tan_half_fov_sq = tan_half_fov * tan_half_fov
+        # Approximate solid angle per pixel (small angle approximation)
+        d_omega_projector = pixel_area_normalized * tan_half_fov_sq
+
+        # Convert to differential area at intersection
+        # dA = dω * distance² / cos(θ)
+        cos_theta_projector = dr.abs(dr.dot(si_projector.n, -direction_world))
+        dist_projector = si_projector.t
+        d_area = d_omega_projector * (dist_projector * dist_projector) / dr.maximum(cos_theta_projector, 1e-6)
+
+        # Convert differential area to solid angle at current vertex
+        # dω = dA * cos(θ') / distance²
+        cos_theta_vertex = dr.abs(dr.dot(si_projector.n, to_light_normalized))
+        dist_vertex_to_intersection = dist
+        d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(dist_vertex_to_intersection * dist_vertex_to_intersection, 1e-3)
+
+        # PDF in solid angle from current vertex
+        pdf_weight = d_omega_vertex / dr.maximum(pixel_pmf, 1e-6)
+
+        # NOTE: Remove
+        pdf_weight = dr.rcp(dr.maximum(dist * dist, 1e-6))
+        pdf_weight = dr.minimum(pdf_weight, 100.0)
+
+        # Total weight: projector_radiance * BRDF * cos(theta) * visibility / pdf
+        # Note: BRDF already includes cos(theta)
+        em_weight = dr.select(
+            is_visible,
+            projector_radiance * bsdf_value_projector * pdf_weight,
+            mi.Spectrum(0.0)
+        )
+
+        # Fill in direction sample
+        ds.p = intersection_point
+        ds.d = to_light_normalized
+        ds.dist = dist
+        # ds.pdf = 1.0 / dr.maximum(pdf_weight, 1e-6)
+        # ds.delta = False
+
+        # NOTE: Remove
+        ds.pdf = 1.0
+        ds.delta = True
+
+        return ds, em_weight
+
+    def sample_emitter_confocal(self,
+                                scene: mi.Scene,
+                                si: mi.SurfaceInteraction3f,
+                                initial_intersection_point: mi.Point3f,
+                                active: mi.Bool,
+                                si_initial: mi.SurfaceInteraction3f = None) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
+        """
+        Original confocal emitter sampling (fallback when no projector is configured).
         """
         # Create a direction sample pointing to the initial intersection
         ds = dr.zeros(mi.DirectionSample3f)
@@ -235,6 +551,11 @@ class TransientPath(TransientADIntegrator):
         initial_intersection_point = mi.Point3f(0.0)
         si_initial = dr.zeros(mi.SurfaceInteraction3f)
         camera_origin = mi.Point3f(ray.o)  # Store camera origin for NLOS-only check
+        camera_ray_direction = mi.Vector3f(ray.d)  # Store initial camera ray direction
+
+        # Prepare projector if not already done (only once per render)
+        if self.use_confocal_light_source and self.projector_emitter is None:
+            self.prepare_projector(scene)
 
         # Track if we've hit at least one non-directly-visible point (for use_nlos_only)
         has_hit_nlos_point = mi.Bool(False)
@@ -333,13 +654,15 @@ class TransientPath(TransientADIntegrator):
             # Skip emitter sampling for first bounce when use_nlos_only is True
             # Sample emitter: use custom NLOS light source or standard emitter sampling
             if self.use_confocal_light_source:
-                # Use custom emitter sampling toward initial intersection point
+                # Use custom emitter sampling toward initial intersection point (or projector)
                 ds, em_weight = self.sample_emitter(
-                    scene, si, initial_intersection_point, active_em, si_initial, camera_origin)
+                    scene, si, initial_intersection_point, active_em, si_initial,
+                    camera_origin, camera_ray_direction, sampler)
             else:
                 # Standard emitter sampling
                 ds, em_weight = scene.sample_emitter_direction(
                     si, sampler.next_2d(), True, active_em)
+
             active_em &= (ds.pdf != 0.0)
 
             with dr.resume_grad(when=not primal):
