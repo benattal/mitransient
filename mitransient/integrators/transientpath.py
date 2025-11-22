@@ -395,14 +395,9 @@ class TransientPath(TransientADIntegrator):
         d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(dist_vertex_to_intersection * dist_vertex_to_intersection, 1e-3)
 
         # PDF in solid angle from current vertex
-        # pdf_weight = d_omega_vertex / dr.maximum(pixel_pmf, 1e-6)
+        pdf_weight = d_omega_vertex / dr.maximum(pixel_pmf, 1e-6)
+        pdf_weight = dr.clip(pdf_weight, 1e-4, 10000.0)
 
-        # NOTE: Remove
-        pdf_weight = dr.rcp(dr.maximum(dist * dist * pixel_pmf, 1e-6))
-        pdf_weight = dr.minimum(pdf_weight, 10000.0)
-
-        # Total weight: projector_radiance * BRDF * cos(theta) * visibility / pdf
-        # Note: BRDF already includes cos(theta)
         em_weight = dr.select(
             is_visible,
             projector_radiance * bsdf_value_projector * pdf_weight,
@@ -413,13 +408,8 @@ class TransientPath(TransientADIntegrator):
         ds.p = intersection_point
         ds.d = to_light_normalized
         ds.dist = dist
-        # ds.pdf = 1.0 / dr.maximum(pdf_weight, 1e-6)
-        # ds.delta = False
-
-        # NOTE: Remove
-        ds.pdf = 1.0
-        ds.delta = True
-
+        ds.pdf = 1.0 / pdf_weight
+        ds.delta = False
         return ds, em_weight
 
     def sample_emitter_confocal(self,
