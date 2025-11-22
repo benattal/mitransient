@@ -306,7 +306,7 @@ class TransientPath(TransientADIntegrator):
         # - Up direction with camera up ([0, 1, 0])
 
         # Camera forward direction (initial ray direction)
-        camera_forward = dr.normalize(camera_ray_direction)
+        camera_forward = -camera_ray_direction
 
         # Camera up direction
         camera_up = mi.Vector3f(0.0, 1.0, 0.0)
@@ -322,15 +322,11 @@ class TransientPath(TransientADIntegrator):
         projector_to_world_rotation = mi.Matrix3f(
             camera_right,
             camera_up,
-            -camera_forward
-        )
+            camera_forward
+        ).T
 
         # Transform the sampled direction to world space
-        # direction_world = projector_to_world_rotation @ direction_local
-
-        # NOTE: Remove
-        direction_world = initial_intersection_point - camera_origin
-        direction_world = dr.normalize(direction_world)
+        direction_world = projector_to_world_rotation @ direction_local
 
         # Origin is at camera position
         origin_world = camera_origin
@@ -339,17 +335,11 @@ class TransientPath(TransientADIntegrator):
         projector_ray = mi.Ray3f(origin_world, direction_world)
         si_projector = scene.ray_intersect(projector_ray, mi.Bool(True))
 
-        # # TODO: Remove
-        # si_projector = si_initial
-
         # Check if we hit something
         is_valid = mi.Bool(True)
 
         # Intersection point
-        # intersection_point = si_projector.p
-
-        # NOTE: Remove
-        intersection_point = initial_intersection_point 
+        intersection_point = si_projector.p
 
         # Direction from current vertex to intersection point
         to_light = intersection_point - si.p
@@ -380,10 +370,7 @@ class TransientPath(TransientADIntegrator):
         # projector_radiance = self.query_projector_texture(
         #     pixel_x, pixel_y, subpixel_offset_x, subpixel_offset_y
         # )
-        # projector_radiance = (pixel_pmf * self.projector_width * self.projector_height)
-
-        # NOTE: Remove
-        projector_radiance = 1.0
+        projector_radiance = (pixel_pmf * self.projector_width * self.projector_height)
 
         # Compute sampling PDF:
         # pdf_projector_pixel = pixel_pmf (probability of sampling this pixel)
@@ -408,11 +395,11 @@ class TransientPath(TransientADIntegrator):
         d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(dist_vertex_to_intersection * dist_vertex_to_intersection, 1e-3)
 
         # PDF in solid angle from current vertex
-        pdf_weight = d_omega_vertex / dr.maximum(pixel_pmf, 1e-6)
+        # pdf_weight = d_omega_vertex / dr.maximum(pixel_pmf, 1e-6)
 
         # NOTE: Remove
-        pdf_weight = dr.rcp(dr.maximum(dist * dist, 1e-6))
-        pdf_weight = dr.minimum(pdf_weight, 100.0)
+        pdf_weight = dr.rcp(dr.maximum(dist * dist * pixel_pmf, 1e-6))
+        pdf_weight = dr.minimum(pdf_weight, 10000.0)
 
         # Total weight: projector_radiance * BRDF * cos(theta) * visibility / pdf
         # Note: BRDF already includes cos(theta)
