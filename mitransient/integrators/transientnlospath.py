@@ -109,6 +109,19 @@ class TransientNLOSPath(TransientADIntegrator):
          If True, lights are sampled using the Laser Sampling technique.
          See [Royo2022] for more information about Laser Sampling. (default: false)
 
+     * - nlos_confocal
+       - |bool|
+       - If True, the laser light source is assumed to be focused on the first
+         intersection point of the camera ray. This overrides the fixed laser
+         target derived from the scene emitter. (default: false)
+
+     * - use_nlos_only
+       - |bool|
+       - If True, only allows contributions where the ray from the current
+         intersection point to the camera hits a piece of geometry before
+         reaching the camera. This ensures that we only directly illuminate
+         the NLOS scene and exclude direct line-of-sight paths. (default: false)
+
      * - nlos_hidden_geometry_sampling
        - |bool|
        - If False, ray directions are sampled using material properties.
@@ -194,6 +207,8 @@ class TransientNLOSPath(TransientADIntegrator):
             and
             self.hg_sampling
         )
+        self.nlos_confocal: bool = props.get('nlos_confocal', False)
+        self.use_nlos_only: bool = props.get('use_nlos_only', False)
 
     def prepare(self, scene: mi.Scene, sensor: mi.Sensor, seed: mi.UInt32, spp: int, aovs: List):
         # prepare laser sampling
@@ -252,6 +267,13 @@ class TransientNLOSPath(TransientADIntegrator):
                 'The emitter is not pointing at the scene!'
             self.nlos_laser_target: mi.Point3f = si.p
 
+        if self.nlos_confocal and not self.laser_sampling:
+            Log(LogLevel.Warn,
+                "You have enabled 'nlos_confocal' but 'nlos_laser_sampling' is disabled. "
+                "Confocal rendering requires laser sampling to be enabled. "
+                "Enabling 'nlos_laser_sampling' automatically.")
+            self.laser_sampling = True
+
         return super().prepare(scene, sensor, seed, spp, aovs)
 
     @dr.syntax
@@ -307,37 +329,49 @@ class TransientNLOSPath(TransientADIntegrator):
             si: mi.SurfaceInteraction3f, bsdf: mi.BSDF, bsdf_ctx: mi.BSDFContext,
             β: mi.Spectrum, distance: mi.Float, η: mi.Float, depth: mi.UInt,
             active_e: mi.Bool, add_transient) -> mi.Spectrum:
+        Lr_dir = mi.Spectrum(0)
+        primal = mode == dr.ADMode.Primal
+
         ds, em_weight = scene.sample_emitter_direction(
             ref=si, sample=sampler.next_2d(active_e), test_visibility=True, active=active_e)
-        active_e &= (ds.pdf != 0.0)
+        wo = si.to_local(ds.d)
+        bsdf_spec, bsdf_pdf = bsdf.eval_pdf(
+            ctx=bsdf_ctx, si=si, wo=wo, active=active_e)
+        bsdf_spec = si.to_world_mueller(bsdf_spec, -wo, si.wi)
 
-        primal = mode == dr.ADMode.Primal
-        with dr.resume_grad(when=not primal):
-            if dr.hint(not primal, mode='scalar'):
-                # Given the detached emitter sample, *recompute* its
-                # contribution with AD to enable light source optimization
-                ds.d = dr.replace_grad(ds.d, dr.normalize(ds.p - si.p))
-                em_val = scene.eval_emitter_direction(si, ds, active_e)
-                em_weight = dr.replace_grad(em_weight, dr.select(
-                    (ds.pdf != 0), em_val / ds.pdf, 0))
-                dr.disable_grad(ds.d)
-
-            # Query the BSDF for that emitter-sampled direction
-            wo = si.to_local(ds.d)
-            bsdf_spec, bsdf_pdf = bsdf.eval_pdf(
-                ctx=bsdf_ctx, si=si, wo=wo, active=active_e)
-            bsdf_spec = si.to_world_mueller(bsdf_spec, -wo, si.wi)
-
-            Lr_dir = mi.Spectrum(0)
+        if self.nlos_confocal:
             if self.filter_depth != -1:
                 active_e &= (depth == self.filter_depth)
             if self.discard_direct_paths:
                 active_e &= depth > 2
-            Lr_dir[active_e] = β * bsdf_spec * em_weight
+            Lr_dir[active_e] = β * bsdf_spec
 
-        if primal:
-            add_transient(Lr_dir, distance + ds.dist * η,
-                          si.wavelengths, active_e)
+            if primal:
+                add_transient(Lr_dir, distance + ds.dist * η,
+                            si.wavelengths, active_e)
+        else:
+            active_e &= (ds.pdf != 0.0)
+
+            with dr.resume_grad(when=not primal):
+                if dr.hint(not primal, mode='scalar'):
+                    # Given the detached emitter sample, *recompute* its
+                    # contribution with AD to enable light source optimization
+                    ds.d = dr.replace_grad(ds.d, dr.normalize(ds.p - si.p))
+                    em_val = scene.eval_emitter_direction(si, ds, active_e)
+                    em_weight = dr.replace_grad(em_weight, dr.select(
+                        (ds.pdf != 0), em_val / ds.pdf, 0))
+                    dr.disable_grad(ds.d)
+
+                # Query the BSDF for that emitter-sampled direction
+                if self.filter_depth != -1:
+                    active_e &= (depth == self.filter_depth)
+                if self.discard_direct_paths:
+                    active_e &= depth > 2
+                Lr_dir[active_e] = β * bsdf_spec * em_weight
+
+            if primal:
+                add_transient(Lr_dir, distance + ds.dist * η,
+                            si.wavelengths, active_e)
 
         return Lr_dir
 
@@ -346,7 +380,7 @@ class TransientNLOSPath(TransientADIntegrator):
             self, mode: dr.ADMode, scene: mi.Scene, sampler: mi.Sampler,
             si: mi.SurfaceInteraction3f, bsdf: mi.BSDF, bsdf_ctx: mi.BSDFContext,
             β: mi.Spectrum, distance: mi.Float, η: mi.Float, depth: mi.UInt,
-            active_e: mi.Bool, add_transient) -> mi.Spectrum:
+            active_e: mi.Bool, add_transient, laser_target: mi.Point3f) -> mi.Spectrum:
         """
         NLOS scenes only have one laser emitter - standard
         emitter sampling techniques do not apply as most
@@ -363,10 +397,10 @@ class TransientNLOSPath(TransientADIntegrator):
 
         # 1. Obtain direction to NLOS illuminated point
         #    and test visibility with ray_test
-        d = self.nlos_laser_target - si.p
+        d = laser_target - si.p
         distance_laser = dr.norm(d)
         d /= distance_laser
-        ray_bsdf = si.spawn_ray_to(self.nlos_laser_target)
+        ray_bsdf = si.spawn_ray_to(laser_target)
         active_e &= ~scene.ray_test(ray_bsdf, active_e)
 
         # 2. Evaluate BSDF to desired direction
@@ -433,6 +467,37 @@ class TransientNLOSPath(TransientADIntegrator):
 
         return bs, dr.select(active, bsdf_spec, 0.0)
 
+    def _check_nlos_visibility(self, scene: mi.Scene, si: mi.SurfaceInteraction3f,
+                               camera_origin: mi.Point3f, has_hit_nlos_point: mi.Bool) -> Tuple[mi.Bool, mi.Bool]:
+        """
+        Helper to check if the current point is directly visible from the camera.
+        Returns updated has_hit_nlos_point and a boolean indicating if contribution should be zeroed.
+        """
+        if not self.use_nlos_only:
+            return has_hit_nlos_point, mi.Bool(False)
+
+        # Check if current point is directly visible from camera
+        # Cast ray from camera toward current intersection point
+        point_direction = dr.normalize(si.p - camera_origin)
+        visibility_ray_origin = camera_origin
+        visibility_ray = mi.Ray3f(visibility_ray_origin, point_direction)
+
+        # Check if ray from camera hits the current point without hitting other geometry
+        si_visibility = scene.ray_intersect(visibility_ray, mi.Bool(True))
+
+        # Point is directly visible if the ray hits the current point (within epsilon)
+        # Check that the hit point is very close to si.p
+        epsilon_distance = 1e-2
+        is_directly_visible = si_visibility.is_valid() & (dr.norm(si_visibility.p - si.p) < epsilon_distance)
+
+        # Update tracking: if this point is NOT directly visible, mark that we've hit an NLOS point
+        has_hit_nlos_point |= ~is_directly_visible
+
+        # Zero out contributions if point is directly visible AND we haven't hit an NLOS point yet
+        should_zero_contribution = ~has_hit_nlos_point
+
+        return has_hit_nlos_point, should_zero_contribution
+
     @dr.syntax
     def sample(self,
                mode: dr.ADMode,
@@ -486,6 +551,21 @@ class TransientNLOSPath(TransientADIntegrator):
         else:
             emitter_sample_f = self.emitter_nee_sample
 
+        # Store initial camera ray intersection for confocal mode
+        initial_intersection_point = mi.Point3f(0.0)
+        camera_origin = mi.Point3f(ray.o)  # Store camera origin for NLOS-only check
+
+        # Track if we've hit at least one non-directly-visible point (for use_nlos_only)
+        has_hit_nlos_point = mi.Bool(False)
+        should_zero_contribution = mi.Bool(False)
+        is_directly_visible = mi.Bool(True)
+
+        if self.nlos_confocal:
+            si_initial = scene.ray_intersect(mi.Ray3f(ray),
+                                             ray_flags=mi.RayFlags.All,
+                                             coherent=mi.Mask(True))
+            initial_intersection_point = si_initial.p
+
         while dr.hint(active,
                       max_iterations=self.max_depth,
                       label="Transient Path (%s)" % mode.name):
@@ -521,6 +601,12 @@ class TransientNLOSPath(TransientADIntegrator):
             with dr.resume_grad(when=not primal):
                 Le = β * mi.Spectrum(mis) * ds.emitter.eval(si, active_next)
 
+            if self.use_nlos_only:
+                has_hit_nlos_point, should_zero_contribution = self._check_nlos_visibility(
+                    scene, si, camera_origin, has_hit_nlos_point)
+                Le = dr.select(should_zero_contribution, mi.Spectrum(0.0), Le)
+                L = dr.select(should_zero_contribution, mi.Spectrum(0.0), L)
+
             # Add transient contribution because of emitter found
             if primal:
                 add_transient(Le, distance, ray.wavelengths, active)
@@ -535,11 +621,25 @@ class TransientNLOSPath(TransientADIntegrator):
                 bsdf.flags(), mi.BSDFFlags.Smooth)
 
             # Uses NEE or laser sampling depending on self.laser_sampling
-            Lr_dir = emitter_sample_f(
-                mode, scene, sampler,
-                si, bsdf, bsdf_ctx,
-                β, distance, η, depth,
-                active_em, add_transient)
+            if self.laser_sampling:
+                target = initial_intersection_point if self.nlos_confocal else self.nlos_laser_target
+                Lr_dir = emitter_sample_f(
+                    mode, scene, sampler,
+                    si, bsdf, bsdf_ctx,
+                    β, distance, η, depth,
+                    active_em, add_transient, target)
+            else:
+                Lr_dir = emitter_sample_f(
+                    mode, scene, sampler,
+                    si, bsdf, bsdf_ctx,
+                    β, distance, η, depth,
+                    active_em, add_transient)
+
+            if self.use_nlos_only:
+                has_hit_nlos_point, should_zero_contribution = self._check_nlos_visibility(
+                    scene, si, camera_origin, has_hit_nlos_point)
+                Lr_dir = dr.select(should_zero_contribution, mi.Spectrum(0.0), Lr_dir)
+                L = dr.select(should_zero_contribution, mi.Spectrum(0.0), L)
 
             # ------------------ Detached BSDF sampling -------------------
 
@@ -574,6 +674,8 @@ class TransientNLOSPath(TransientADIntegrator):
                 do_hg_sample, bsdf_sample_hg, bsdf_sample_nhg)
             bsdf_weight = dr.select(
                 do_hg_sample, bsdf_weight_hg, bsdf_weight_nhg)
+
+            # ---- Update loop variables based on current interaction -----
 
             # ---- Update loop variables based on current interaction -----
 

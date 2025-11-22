@@ -1,0 +1,20 @@
+name: mitransient
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - matplotlib
+  - numpy
+  - pandas
+  - pip
+  - pytest
+  - ipywidgets
+  - rich
+  - setuptools
+  - pyrsistent
+  - tqdm
+  - pytorch
+  - torchvision
+  - pip:
+      - mitransient
+      - mitsuba==3.7.0

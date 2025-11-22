@@ -15,6 +15,7 @@ def tonemap_transient(transient, scaling=1.0):
     """Applies a linear tonemapping to the transient image."""
     tnp = np.array(transient)
     channel_top = np.quantile(np.abs(tnp), 0.99)
+    print(channel_top)
     return tnp / channel_top * scaling
 
 
