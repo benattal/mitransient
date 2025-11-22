@@ -84,7 +84,7 @@ class TransientPath(TransientADIntegrator):
          1, then path generation many randomly cease after encountering directly
          visible surfaces. (default: 5)
 
-     * - use_nlos_light_source
+     * - use_confocal_light_source
        - |bool|
        - If True, uses custom emitter sampling that samples the direction from
          the current point to the intersection of the initial camera ray with
@@ -100,7 +100,7 @@ class TransientPath(TransientADIntegrator):
 
     def __init__(self, props: mi.Properties):
         super().__init__(props)
-        self.use_nlos_light_source = props.get("use_nlos_light_source", True)
+        self.use_confocal_light_source = props.get("use_confocal_light_source", True)
         self.use_nlos_only = props.get("use_nlos_only", True)
 
     def sample_emitter(self,
@@ -248,7 +248,7 @@ class TransientPath(TransientADIntegrator):
 
             distance[si.is_valid()] = -si.t
 
-        if self.use_nlos_light_source:
+        if self.use_confocal_light_source:
             si_initial = scene.ray_intersect(mi.Ray3f(ray),
                                             ray_flags=mi.RayFlags.All,
                                             coherent=mi.Mask(True))
@@ -332,7 +332,7 @@ class TransientPath(TransientADIntegrator):
 
             # Skip emitter sampling for first bounce when use_nlos_only is True
             # Sample emitter: use custom NLOS light source or standard emitter sampling
-            if self.use_nlos_light_source:
+            if self.use_confocal_light_source:
                 # Use custom emitter sampling toward initial intersection point
                 ds, em_weight = self.sample_emitter(
                     scene, si, initial_intersection_point, active_em, si_initial, camera_origin)
