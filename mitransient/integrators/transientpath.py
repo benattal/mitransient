@@ -169,17 +169,24 @@ class TransientPath(TransientADIntegrator):
             RGB spectrum value at the interpolated position
         """
         # Convert pixel coordinates to normalized texture coordinates [0, 1]
-        tex_x = pixel_x / self.projector_width
-        tex_y = pixel_y / self.projector_height
+        uv = mi.Point2f(pixel_x / self.projector_width, pixel_y / self.projector_height)
+        return mi.Spectrum(self.projector_texture.eval(uv))
 
-        # Create Point2f for texture evaluation
-        uv = mi.Point2f(tex_x, tex_y)
+    def build_projector_frame(self, camera_ray_direction: mi.Vector3f) -> mi.Matrix3f:
+        """
+        Build orthonormal frame for projector aligned with camera ray.
 
-        # Use the texture object's eval() method which handles interpolation automatically
-        # Note: projector_texture is the actual texture, not the data tensor
-        rgb = self.projector_texture.eval(uv)
+        Args:
+            camera_ray_direction: Initial camera ray direction
 
-        return mi.Spectrum(rgb)
+        Returns:
+            3x3 rotation matrix (columns: right, up, forward)
+        """
+        camera_forward = -camera_ray_direction
+        camera_up = mi.Vector3f(0.0, 1.0, 0.0)
+        camera_right = dr.normalize(dr.cross(camera_forward, camera_up))
+        camera_up = dr.normalize(dr.cross(camera_right, camera_forward))
+        return mi.Matrix3f(camera_right, camera_up, camera_forward)
 
     def sample_emitter(self,
                        scene: mi.Scene,
@@ -193,9 +200,8 @@ class TransientPath(TransientADIntegrator):
         """
         Custom emitter sampling that uses a projector pattern aligned with the camera ray.
 
-        If a projector emitter is configured, this samples a pixel from the projector
-        based on its intensity PMF, transforms it to align with the camera ray, and
-        computes the radiance contribution from that point.
+        If a projector emitter is configured, samples a pixel from the projector based on
+        its intensity PMF and computes the radiance contribution.
 
         Args:
             scene: The scene
@@ -212,11 +218,13 @@ class TransientPath(TransientADIntegrator):
             em_weight: Weight of this sample including BRDF, radiance, and PDF
         """
         # Check if we have a projector configured
-        if self.projector_texture is None or self.projector_pmf is None or sampler is None:
-            # Fall back to original confocal behavior
+        has_projector = (self.projector_texture is not None and
+                        self.projector_pmf is not None and
+                        sampler is not None)
+
+        if not has_projector:
             return self.sample_emitter_confocal(scene, si, initial_intersection_point, active, si_initial)
 
-        # Use PMF-based sampling for projector
         return self.sample_emitter_projector_pmf(
             scene, si, initial_intersection_point, active,
             si_initial, camera_origin, camera_ray_direction, sampler
@@ -285,72 +293,37 @@ class TransientPath(TransientADIntegrator):
             ds: Direction sample toward the projector
             em_weight: Weight including radiance with inverse square falloff
         """
-        # Direction from intersection point to projector (camera origin)
+        # Direction from intersection point to projector
         to_projector = camera_origin - si.p
         dist = dr.norm(to_projector)
         to_projector_normalized = dr.normalize(to_projector)
 
-        # The incoming ray direction at this point (from projector to intersection)
-        incoming_direction = -to_projector_normalized
-
-        # Transform incoming direction to projector local space to find pixel coordinates
-        # Build projector coordinate frame
-        camera_forward = -camera_ray_direction
-        camera_up = mi.Vector3f(0.0, 1.0, 0.0)
-        camera_right = dr.normalize(dr.cross(camera_forward, camera_up))
-        camera_up = dr.normalize(dr.cross(camera_right, camera_forward))
-
-        # Build world-to-projector rotation (inverse of projector-to-world)
-        world_to_projector_rotation = mi.Matrix3f(
-            camera_right,
-            camera_up,
-            camera_forward
-        )
-
-        # Transform to projector local space
-        direction_local = world_to_projector_rotation @ incoming_direction
+        # Transform incoming direction to projector local space
+        world_to_projector = self.build_projector_frame(camera_ray_direction)
+        direction_local = world_to_projector @ (-to_projector_normalized)
 
         # Convert to pixel coordinates
-        # direction_local.z should be negative (pointing into scene)
         tan_half_fov = dr.tan(self.projector_fov / 2.0)
-
-        # Normalized coordinates [-1, 1]
         normalized_x = direction_local.x / (-direction_local.z * tan_half_fov)
         normalized_y = direction_local.y / (-direction_local.z * tan_half_fov)
 
-        # Convert to continuous pixel coordinates [0, width) and [0, height)
-        pixel_x_continuous = (normalized_x + 1.0) * 0.5 * self.projector_width
-        pixel_y_continuous = (normalized_y + 1.0) * 0.5 * self.projector_height
+        # Convert to continuous pixel coordinates and clamp
+        pixel_x = dr.clip((normalized_x + 1.0) * 0.5 * self.projector_width, 0, self.projector_width - 1e-6)
+        pixel_y = dr.clip((normalized_y + 1.0) * 0.5 * self.projector_height, 0, self.projector_height - 1e-6)
 
-        # Clamp to valid range
-        pixel_x_continuous = dr.clip(pixel_x_continuous, 0, self.projector_width - 1e-6)
-        pixel_y_continuous = dr.clip(pixel_y_continuous, 0, self.projector_height - 1e-6)
-
-        # Query projector texture at this location
-        projector_radiance = self.query_projector_texture(
-            pixel_x_continuous, pixel_y_continuous
-        )
-
-        # Apply inverse square falloff
-        dist_squared = dr.maximum(dist * dist, 1e-6)
-        inverse_square_falloff = dr.rcp(dist_squared)
-        inverse_square_falloff = dr.minimum(inverse_square_falloff, 10000.0)
-
-        # Final radiance with falloff
-        radiance_with_falloff = projector_radiance * inverse_square_falloff
+        # Query texture and apply inverse square falloff
+        projector_radiance = self.query_projector_texture(pixel_x, pixel_y)
+        falloff = dr.minimum(dr.rcp(dr.maximum(dist * dist, 1e-6)), 10000.0)
 
         # Create direction sample pointing toward projector
         ds = dr.zeros(mi.DirectionSample3f)
         ds.p = camera_origin
         ds.d = to_projector_normalized
         ds.dist = dist
-        ds.pdf = 1.0  # Deterministic
+        ds.pdf = 1.0
         ds.delta = True
 
-        # The weight is just the radiance (no BRDF evaluation needed here)
-        em_weight = mi.Spectrum(radiance_with_falloff)
-
-        return ds, em_weight
+        return ds, mi.Spectrum(projector_radiance * falloff)
 
     def sample_emitter_projector_pmf(self,
                                       scene: mi.Scene,
@@ -363,173 +336,84 @@ class TransientPath(TransientADIntegrator):
                                       sampler: mi.Sampler) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
         """
         Sample emitter using PMF-based sampling (for non-initial intersection points).
-        This is the original projector sampling logic.
         """
-
-        # Initialize output
-        ds = dr.zeros(mi.DirectionSample3f)
-        em_weight = mi.Spectrum(0.0)
-
         # Sample a projector pixel using the intensity PMF
-        # We need to use DrJit-compatible sampling here
-        # Use discrete distribution sampling with precomputed CDF
-
-        # Get a uniform random sample - this is a DrJit array
-        u = sampler.next_1d()
-
-        # Convert CDF to DrJit array
-        cdf_dr = mi.Float(self.projector_cdf)
-
-        # Binary search in CDF - use DrJit searchsorted equivalent
-        # For now, use a simple approach: evaluate the CDF at index positions
         num_pixels = self.projector_width * self.projector_height
-        pixel_idx = dr.binary_search(
-            0, num_pixels - 1,
-            lambda idx: dr.gather(mi.Float, cdf_dr, idx) < u
-        )
+        cdf_dr = mi.Float(self.projector_cdf)
+        pixel_idx = dr.clip(dr.binary_search(0, num_pixels - 1,
+                                             lambda idx: dr.gather(mi.Float, cdf_dr, idx) < sampler.next_1d()),
+                           0, num_pixels - 1)
 
-        # Clamp to valid range
-        pixel_idx = dr.clip(pixel_idx, 0, num_pixels - 1)
-
-        # Convert to x, y coordinates
+        # Convert to x, y coordinates with sub-pixel sampling
         pixel_y = pixel_idx // self.projector_width
         pixel_x = pixel_idx % self.projector_width
+        subpixel_offset_x = sampler.next_1d()
+        subpixel_offset_y = sampler.next_1d()
 
-        # Get the PMF value for this pixel - use dr.gather to index into PMF array
+        # Get pixel PMF value
         pmf_flat_dr = mi.Float(self.projector_pmf.flatten())
         pixel_pmf = dr.gather(mi.Float, pmf_flat_dr, pixel_idx)
 
-        # Sub-pixel sampling: sample a random position within the pixel
-        # Get two random samples for x and y offset within the pixel
-        subpixel_offset_x = sampler.next_1d()  # Random value in [0, 1]
-        subpixel_offset_y = sampler.next_1d()  # Random value in [0, 1]
-
-        # Convert pixel coordinates to normalized coordinates [-1, 1]
-        # Use subpixel_offset instead of 0.5 for random position within pixel
+        # Convert to normalized coordinates [-1, 1]
         normalized_x = 2.0 * (pixel_x + subpixel_offset_x) / self.projector_width - 1.0
         normalized_y = 2.0 * (pixel_y + subpixel_offset_y) / self.projector_height - 1.0
 
         # Compute direction in projector local space
         tan_half_fov = dr.tan(self.projector_fov / 2.0)
-        dir_x = tan_half_fov * normalized_x
-        dir_y = tan_half_fov * normalized_y
-        dir_z = -1.0
+        direction_local = dr.normalize(mi.Vector3f(
+            tan_half_fov * normalized_x,
+            tan_half_fov * normalized_y,
+            -1.0
+        ))
 
-        direction_local = mi.Vector3f(dir_x, dir_y, dir_z)
-        direction_local = dr.normalize(direction_local)
-
-        # Build projector_to_world transform that aligns:
-        # - Center pixel with the primary camera ray direction
-        # - Origin with camera origin
-        # - Up direction with camera up ([0, 1, 0])
-
-        # Camera forward direction (initial ray direction)
-        camera_forward = -camera_ray_direction
-
-        # Camera up direction
-        camera_up = mi.Vector3f(0.0, 1.0, 0.0)
-
-        # Build right direction (perpendicular to forward and up)
-        camera_right = dr.normalize(dr.cross(camera_forward, camera_up))
-
-        # Recompute up to be orthogonal
-        camera_up = dr.normalize(dr.cross(camera_right, camera_forward))
-
-        # Build rotation matrix: columns are [right, up, -forward]
-        # Note: We use -forward because projector local space has z=-1 pointing into scene
-        projector_to_world_rotation = mi.Matrix3f(
-            camera_right,
-            camera_up,
-            camera_forward
-        ).T
-
-        # Transform the sampled direction to world space
-        direction_world = projector_to_world_rotation @ direction_local
-
-        # Origin is at camera position
-        origin_world = camera_origin
-
-        # Cast ray from projector origin in sampled direction to find intersection
-        projector_ray = mi.Ray3f(origin_world, direction_world)
-        si_projector = scene.ray_intersect(projector_ray, mi.Bool(True))
-
-        # Check if we hit something
-        is_valid = mi.Bool(True)
-
-        # Intersection point
-        intersection_point = si_projector.p
+        # Transform to world space and find intersection
+        projector_to_world = self.build_projector_frame(camera_ray_direction).T
+        direction_world = projector_to_world @ direction_local
+        si_projector = scene.ray_intersect(mi.Ray3f(camera_origin, direction_world), mi.Bool(True))
 
         # Direction from current vertex to intersection point
-        to_light = intersection_point - si.p
+        to_light = si_projector.p - si.p
         dist = dr.norm(to_light)
         to_light_normalized = dr.normalize(to_light)
 
-        # Check visibility from current point to intersection
-        epsilon_bump = 1e-4
-        shadow_ray = mi.Ray3f(si.p + to_light_normalized * epsilon_bump, to_light_normalized)
-        si_shadow = scene.ray_intersect(shadow_ray, is_valid)
+        # Check visibility
+        shadow_ray = mi.Ray3f(si.p + to_light_normalized * 1e-4, to_light_normalized)
+        si_shadow = scene.ray_intersect(shadow_ray, mi.Bool(True))
+        is_visible = (dr.norm(si_shadow.p - si_projector.p) < 1e-4)
 
-        epsilon = 1e-4
-        is_visible = (dr.norm(si_shadow.p - intersection_point) < epsilon)
-
-        # Get the BSDF at the projector intersection point
-        bsdf_projector = si_projector.bsdf()
-
-        # Outgoing direction at intersection (toward current vertex)
-        wo_projector = si_projector.to_local(-to_light_normalized)
-
-        # Evaluate BRDF at the intersection point
+        # Evaluate BSDF at the projector intersection point
         bsdf_ctx = mi.BSDFContext()
-        bsdf_value_projector = bsdf_projector.eval(bsdf_ctx, si_projector, wo_projector, is_valid)
-        bsdf_value_projector = si_projector.to_world_mueller(bsdf_value_projector, -wo_projector, si_projector.wi)
+        wo_projector = si_projector.to_local(-to_light_normalized)
+        bsdf_value = si_projector.bsdf().eval(bsdf_ctx, si_projector, wo_projector, mi.Bool(True))
+        bsdf_value = si_projector.to_world_mueller(bsdf_value, -wo_projector, si_projector.wi)
 
-        # Get projector radiance (from texture intensity)
-        # Query the texture at continuous pixel coordinates using bilinear interpolation
-        pixel_x_continuous = mi.Float(pixel_x) + subpixel_offset_x
-        pixel_y_continuous = mi.Float(pixel_y) + subpixel_offset_y
+        # Get projector radiance
         projector_radiance = self.query_projector_texture(
-            pixel_x_continuous, pixel_y_continuous
+            mi.Float(pixel_x) + subpixel_offset_x,
+            mi.Float(pixel_y) + subpixel_offset_y
         )
 
-        # Compute sampling PDF:
-        # pdf_projector_pixel = pixel_pmf (probability of sampling this pixel)
-        # We need to convert from projector solid angle to area to solid angle at current vertex
-
-        # Differential solid angle in projector space per pixel
+        # Compute PDF weight (convert from projector solid angle to vertex solid angle)
         pixel_area_normalized = (2.0 / self.projector_width) * (2.0 / self.projector_height)
-        tan_half_fov_sq = tan_half_fov * tan_half_fov
-        # Approximate solid angle per pixel (small angle approximation)
-        d_omega_projector = pixel_area_normalized * tan_half_fov_sq
+        d_omega_projector = pixel_area_normalized * tan_half_fov * tan_half_fov
 
-        # Convert to differential area at intersection
-        # dA = dω * distance² / cos(θ)
         cos_theta_projector = dr.abs(dr.dot(si_projector.n, -direction_world))
-        dist_projector = si_projector.t
-        # Doesn't contain dist_projector ** 2 because this cancels with inverse square falloff from projector
         d_area = d_omega_projector / dr.maximum(cos_theta_projector, 1e-6)
 
-        # Convert differential area to solid angle at current vertex
-        # dω = dA * cos(θ') / distance²
         cos_theta_vertex = dr.abs(dr.dot(si_projector.n, to_light_normalized))
-        dist_vertex_to_intersection = dist
-        d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(dist_vertex_to_intersection * dist_vertex_to_intersection, 1e-3)
+        d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(dist * dist, 1e-3)
 
-        # PDF in solid angle from current vertex
-        pdf_weight = d_omega_vertex / dr.maximum(pixel_pmf, 1e-6)
-        pdf_weight = dr.clip(pdf_weight, 1e-4, 10000.0)
-
-        em_weight = dr.select(
-            is_visible,
-            projector_radiance * bsdf_value_projector * pdf_weight,
-            mi.Spectrum(0.0)
-        )
+        pdf_weight = dr.clip(d_omega_vertex / dr.maximum(pixel_pmf, 1e-6), 1e-4, 10000.0)
 
         # Fill in direction sample
-        ds.p = intersection_point
+        ds = dr.zeros(mi.DirectionSample3f)
+        ds.p = si_projector.p
         ds.d = to_light_normalized
-        ds.dist = dist + dist_projector
+        ds.dist = dist + si_projector.t
         ds.pdf = 1.0 / pdf_weight
         ds.delta = False
+
+        em_weight = dr.select(is_visible, projector_radiance * bsdf_value * pdf_weight, mi.Spectrum(0.0))
         return ds, em_weight
 
     def sample_emitter_confocal(self,
@@ -541,62 +425,30 @@ class TransientPath(TransientADIntegrator):
         """
         Original confocal emitter sampling (fallback when no projector is configured).
         """
-        # Create a direction sample pointing to the initial intersection
+        # Create direction sample pointing to initial intersection
+        to_initial = initial_intersection_point - si.p
         ds = dr.zeros(mi.DirectionSample3f)
         ds.p = initial_intersection_point
-        ds.d = dr.normalize(initial_intersection_point - si.p)
-        ds.dist = dr.norm(initial_intersection_point - si.p)
-        ds.pdf = 1.0  # Deterministic sampling
-        ds.delta = True  # Not a delta distribution
+        ds.d = dr.normalize(to_initial)
+        ds.dist = dr.norm(to_initial)
+        ds.pdf = 1.0
+        ds.delta = True
 
-        # Visibility test: check if ray from current point to initial intersection is occluded
-        # Bump the shadow ray origin by epsilon along the shadow direction to avoid self-intersection
-        epsilon_bump = 1e-4
-        shadow_direction = dr.normalize(initial_intersection_point - si.p)
-        shadow_origin = si.p + shadow_direction * epsilon_bump
-
-        # Create shadow ray with bumped origin
-        shadow_ray = mi.Ray3f(shadow_origin, shadow_direction)
-
-        # Perform visibility test - check if we hit something before reaching the initial point
-        # We use a small epsilon to account for numerical precision
-        epsilon = 1e-4
+        # Visibility test
+        shadow_ray = mi.Ray3f(si.p + ds.d * 1e-4, ds.d)
         si_shadow = scene.ray_intersect(shadow_ray, active)
+        is_visible = (dr.norm(si_shadow.p - initial_intersection_point) < 1e-4)
 
-        # Check if the shadow ray reaches the initial intersection without hitting other geometry
-        # The ray is visible if: (1) it doesn't hit anything, OR (2) the hit is very close to target
-        is_visible = (dr.norm(si_shadow.p - initial_intersection_point) < epsilon)
-
-        # Get the BSDF at the initial intersection point
-        bsdf_initial = si_initial.bsdf()
-
-        # Direction from initial point to current point (outgoing from initial point's perspective)
-        wo_initial = si_initial.to_local(-ds.d)
-
-        # Standard BSDF evaluation context
+        # Evaluate BSDF at initial intersection point
         bsdf_ctx = mi.BSDFContext()
-
-        # Evaluate BRDF * cos(theta) at the initial intersection point
-        bsdf_value = bsdf_initial.eval(bsdf_ctx, si_initial, wo_initial, active)
-
-        # Convert back to world coordinates if using polarization
+        wo_initial = si_initial.to_local(-ds.d)
+        bsdf_value = si_initial.bsdf().eval(bsdf_ctx, si_initial, wo_initial, active)
         bsdf_value = si_initial.to_world_mueller(bsdf_value, -wo_initial, si_initial.wi)
 
-        # Compute inverse square falloff: 1 / dist^2
-        # Clip to prevent extremely large values at small distances
-        # Using a minimum distance of 0.01 meters (1 cm) to avoid division by zero
-        dist_squared = dr.maximum(ds.dist * ds.dist, 1e-6)  # min dist = 0.01m
-        inverse_square_falloff = dr.rcp(dist_squared)
+        # Apply inverse square falloff
+        falloff = dr.minimum(dr.rcp(dr.maximum(ds.dist * ds.dist, 1e-6)), 10000.0)
 
-        # Clamp the falloff to a reasonable maximum (e.g., 10000)
-        inverse_square_falloff = dr.minimum(inverse_square_falloff, 10000.0)
-
-        # Weight includes BRDF at initial point, inverse square falloff, and visibility
-        # Zero contribution if occluded or if direction is perpendicular to normal
-        em_weight = dr.select(is_visible,
-                             bsdf_value * mi.Spectrum(inverse_square_falloff),
-                             mi.Spectrum(0.0))
-
+        em_weight = dr.select(is_visible, bsdf_value * mi.Spectrum(falloff), mi.Spectrum(0.0))
         return ds, em_weight
 
     @dr.syntax
