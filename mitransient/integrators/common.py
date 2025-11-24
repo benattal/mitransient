@@ -25,9 +25,9 @@ class TransientADIntegrator(ADIntegrator):
         self.camera_unwarp = props.get("camera_unwarp", False)
         # FIXME document this and add to other integrators maybe
         self.discard_direct_light = props.get("discard_direct_light", False)
-        # TODO (diego): Figure out how to move these parameters to filter properties
-        _ = props.get("gaussian_stddev", 0.5)
-        _ = props.get("temporal_filter", "")
+        # Store temporal filter parameters for pulse shape convolution
+        self.temporal_filter = props.get("temporal_filter", "box")
+        self.gaussian_stddev = props.get("gaussian_stddev", 0.5)
 
     def prepare(self, scene, sensor, seed, spp, aovs):
         film = sensor.film()
@@ -137,6 +137,11 @@ class TransientADIntegrator(ADIntegrator):
 
         self.check_transient_(scene, sensor)
 
+        # Pass temporal filter parameters to the film
+        if isinstance(film, TransientHDRFilm):
+            film.temporal_filter = self.temporal_filter
+            film.gaussian_stddev = self.gaussian_stddev
+
         # Disable derivatives in all of the following
         with dr.suspend_grad():
             # Prepare the film and sample generator for rendering
@@ -221,6 +226,11 @@ class TransientADIntegrator(ADIntegrator):
             sensor = scene.sensors()[sensor]
         film = sensor.film()
         self.check_transient_(scene, sensor)
+
+        # Pass temporal filter parameters to the film
+        if isinstance(film, TransientHDRFilm):
+            film.temporal_filter = self.temporal_filter
+            film.gaussian_stddev = self.gaussian_stddev
 
         # Disable derivatives in all of the following
         with dr.suspend_grad():
@@ -330,6 +340,11 @@ class TransientADIntegrator(ADIntegrator):
             sensor = scene.sensors()[sensor]
         film = sensor.film()
         self.check_transient_(scene, sensor)
+
+        # Pass temporal filter parameters to the film
+        if isinstance(film, TransientHDRFilm):
+            film.temporal_filter = self.temporal_filter
+            film.gaussian_stddev = self.gaussian_stddev
 
         grad_in_steady, grad_in_transient = grad_in
 

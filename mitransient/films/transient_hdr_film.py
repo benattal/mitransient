@@ -95,6 +95,10 @@ class TransientHDRFilm(mi.Film):
         self.bin_width_opl = props.get("bin_width_opl", mi.Float(0.003))
         self.start_opl = props.get("start_opl", mi.Float(0))
 
+        # Temporal filter parameters (set by integrator during rendering)
+        self.temporal_filter = "box"
+        self.gaussian_stddev = 0.5
+
     def end_opl(self):
         return self.start_opl + self.bin_width_opl * self.temporal_bins
 
@@ -185,6 +189,95 @@ class TransientHDRFilm(mi.Film):
 
         return steady_image, transient_image
 
+    def _create_pulse_kernel(self, filter_type: str, stddev: float, kernel_size: int):
+        """
+        Create a pulse shape kernel for convolution.
+
+        Args:
+            filter_type: 'box' or 'gaussian'
+            stddev: Standard deviation for Gaussian filter (in bins)
+            kernel_size: Size of the kernel
+
+        Returns:
+            DrJit array containing the normalized kernel
+        """
+        if filter_type == "box":
+            # Box filter - just return delta function (no convolution)
+            kernel = dr.zeros(Float, kernel_size)
+            kernel[kernel_size // 2] = 1.0
+            return kernel
+        elif filter_type == "gaussian":
+            # Gaussian filter
+            center = kernel_size // 2
+            t = dr.arange(Float, kernel_size) - float(center)
+            kernel = dr.exp(-0.5 * (t / float(stddev)) ** 2)
+            # Normalize
+            kernel_sum = dr.sum(kernel)[0]
+            kernel = kernel / kernel_sum
+            return kernel
+        else:
+            mi.Log(mi.LogLevel.Warn,
+                   f"Unknown temporal_filter type '{filter_type}', using box filter")
+            kernel = dr.zeros(Float, kernel_size)
+            kernel[kernel_size // 2] = 1.0
+            return kernel
+
+    def _convolve_temporal_drjit(self, data: TensorXf):
+        """
+        Convolve the transient data with a pulse shape along the temporal dimension.
+
+        Args:
+            data: Tensor of shape (height, width, temporal_bins, channels)
+
+        Returns:
+            Convolved tensor of the same shape
+        """
+        if self.temporal_filter == "box":
+            # No convolution needed for box filter
+            return data
+
+        h, w, t, c = data.shape
+
+        # Create kernel based on filter type
+        # Kernel size should be large enough to capture the filter
+        kernel_size = self.temporal_bins
+        kernel = self._create_pulse_kernel(self.temporal_filter, self.gaussian_stddev, kernel_size)
+
+        # Vectorized convolution along temporal dimension
+        half_kernel = kernel_size // 2
+        result = dr.zeros(Float, h * w * t * c)
+
+        # For each kernel tap, gather values and accumulate
+        for k in range(kernel_size):
+            t_offset = k - half_kernel
+
+            # Create indices for this kernel tap
+            # Shape: all pixels, all time bins, all channels
+            idx = dr.arange(Int32, h * w * t * c)
+
+            # Decompose flat index into (pixel, time, channel)
+            pixel_idx = idx // (t * c)
+            remainder = idx - pixel_idx * (t * c)
+            t_idx = remainder // c
+            ch_idx = remainder - t_idx * c
+
+            # Calculate source time index with offset
+            t_src = t_idx + t_offset
+
+            # Check if within bounds
+            valid = (t_src >= 0) & (t_src < t)
+
+            # Calculate source index
+            src_idx = pixel_idx * (t * c) + t_src * c + ch_idx
+
+            # Gather values (with zero for out-of-bounds)
+            values = dr.gather(Float, data.array, src_idx, valid)
+
+            # Accumulate weighted contribution
+            dr.scatter_reduce(dr.ReduceOp.Add, result, values * kernel[k], idx, valid)
+
+        return TensorXf(result, (h, w, t, c))
+
     def develop_transient_(self, raw: bool = False):
         if not self.transient_storage:
             mi.Log(mi.LogLevel.Error,
@@ -213,7 +306,12 @@ class TransientHDRFilm(mi.Film):
 
         values = values_ / dr.select((weight == 0.0), 1.0, weight)
 
-        return TensorXf(values, tuple(list(data.shape[0:-1]) + [target_ch]))
+        result = TensorXf(values, tuple(list(data.shape[0:-1]) + [target_ch]))
+
+        # Apply pulse shape convolution
+        result = self._convolve_temporal_drjit(result)
+
+        return result
 
     def add_transient_data(self, pos: mi.Vector2f, distance: mi.Float,
                            wavelengths: mi.UnpolarizedSpectrum, spec: mi.Spectrum,
