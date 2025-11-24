@@ -111,6 +111,15 @@ class TransientPath(TransientADIntegrator):
        - |float|
        - Field of view (in radians) for the projector texture. Controls how the
          texture is mapped onto the scene. (default: 0.2)
+
+     * - projector_frame
+       - |transform|
+       - 3x3 rotation matrix defining the projector's coordinate frame.
+         Columns represent [right, up, forward] vectors in world space.
+         If not provided and use_confocal_light_source=True, the frame is
+         computed from the camera ray direction. If not provided and
+         use_confocal_light_source=False but projector_texture is set,
+         defaults to identity (aligned with world axes). (default: None)
     """
 
     def __init__(self, props: mi.Properties):
@@ -122,8 +131,12 @@ class TransientPath(TransientADIntegrator):
         self.projector_texture = props.get("projector_texture", None)
         self.projector_fov = props.get("projector_fov", 0.2)  # Default FOV in radians
 
+        # Projector frame: if provided, use it; otherwise will be computed dynamically
+        self.projector_frame = props.get("projector_frame", None)
+
         # Storage for projector texture and precomputed data
-        if self.use_confocal_light_source:
+        # Prepare projector if we have a texture, regardless of confocal mode
+        if self.projector_texture is not None:
             self.prepare_projector()
         else:
             self.projector_pmf = None
@@ -172,16 +185,27 @@ class TransientPath(TransientADIntegrator):
         uv = mi.Point2f(pixel_x / self.projector_width, pixel_y / self.projector_height)
         return mi.Spectrum(self.projector_texture.eval(uv))
 
-    def build_projector_frame(self, camera_ray_direction: mi.Vector3f) -> mi.Matrix3f:
+    def build_projector_frame(self, camera_ray_direction: mi.Vector3f = None) -> mi.Matrix3f:
         """
-        Build orthonormal frame for projector aligned with camera ray.
+        Build orthonormal frame for projector.
+
+        If use_confocal_light_source is False and projector_frame was provided in constructor,
+        returns that stored frame. Otherwise, builds a frame aligned with the camera ray direction.
 
         Args:
-            camera_ray_direction: Initial camera ray direction
+            camera_ray_direction: Initial camera ray direction (required when computing frame dynamically)
 
         Returns:
             3x3 rotation matrix (columns: right, up, forward)
         """
+        # Only use stored projector frame when NOT in confocal mode
+        if not self.use_confocal_light_source and self.projector_frame is not None:
+            return self.projector_frame
+
+        # Otherwise, compute from camera ray direction (for confocal mode or when frame not provided)
+        if camera_ray_direction is None:
+            raise ValueError("camera_ray_direction required when projector_frame is not set or in confocal mode")
+
         camera_forward = -camera_ray_direction
         camera_up = mi.Vector3f(0.0, 1.0, 0.0)
         camera_right = dr.normalize(dr.cross(camera_forward, camera_up))
@@ -198,10 +222,11 @@ class TransientPath(TransientADIntegrator):
                        camera_ray_direction: mi.Vector3f = None,
                        sampler: mi.Sampler = None) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
         """
-        Custom emitter sampling that uses a projector pattern aligned with the camera ray.
+        Custom emitter sampling that uses a projector pattern or confocal sampling.
 
-        If a projector emitter is configured, samples a pixel from the projector based on
-        its intensity PMF and computes the radiance contribution.
+        If a projector texture is configured, samples a pixel from the projector based on
+        its intensity PMF and computes the radiance contribution. Otherwise, falls back
+        to confocal sampling if use_confocal_light_source is True.
 
         Args:
             scene: The scene
@@ -222,13 +247,18 @@ class TransientPath(TransientADIntegrator):
                         self.projector_pmf is not None and
                         sampler is not None)
 
-        if not has_projector:
+        if has_projector:
+            # Use projector-based sampling (works with or without confocal mode)
+            return self.sample_emitter_projector_pmf(
+                scene, si, initial_intersection_point, active,
+                si_initial, camera_origin, camera_ray_direction, sampler
+            )
+        elif self.use_confocal_light_source:
+            # Fall back to confocal sampling if no projector
             return self.sample_emitter_confocal(scene, si, initial_intersection_point, active, si_initial)
-
-        return self.sample_emitter_projector_pmf(
-            scene, si, initial_intersection_point, active,
-            si_initial, camera_origin, camera_ray_direction, sampler
-        )
+        else:
+            # This shouldn't be reached, but provide a safe fallback
+            raise ValueError("sample_emitter called without projector or confocal mode enabled")
 
     def sample_emitter_with_projector(self,
                                        scene: mi.Scene,
@@ -597,25 +627,33 @@ class TransientPath(TransientADIntegrator):
                 bsdf.flags(), mi.BSDFFlags.Smooth)
 
             # Skip emitter sampling for first bounce when use_nlos_only is True
-            # Sample emitter: use custom NLOS light source or standard emitter sampling
+            # Sample emitter: use projector, confocal, or standard emitter sampling
 
             # Check if this is the initial intersection point (depth == 0)
             is_initial_intersection = (depth == 0)
 
-            # For initial intersection with projector: query directly
-            if self.use_confocal_light_source and is_initial_intersection:
-                # Use helper function that handles both direct query and PMF sampling
-                ds, em_weight = self.sample_emitter_with_projector(
-                    scene, si, initial_intersection_point, active_em, si_initial,
-                    camera_origin, camera_ray_direction, sampler, is_initial_intersection
-                )
-            elif self.use_confocal_light_source:
-                # No projector, use confocal sampling
-                ds, em_weight = self.sample_emitter(
-                    scene, si, initial_intersection_point, active_em, si_initial,
-                    camera_origin, camera_ray_direction, sampler)
+            # Determine if we should use projector/confocal sampling
+            has_projector = (self.projector_texture is not None and self.projector_pmf is not None)
+
+            if has_projector or self.use_confocal_light_source:
+                # For initial intersection with projector: query directly
+                if has_projector and is_initial_intersection:
+                    # Use helper function that handles both direct query and PMF sampling
+                    ds, em_weight = self.sample_emitter_with_projector(
+                        scene, si, initial_intersection_point, active_em, si_initial,
+                        camera_origin, camera_ray_direction, sampler, is_initial_intersection
+                    )
+                elif has_projector or self.use_confocal_light_source:
+                    # Projector PMF sampling or confocal sampling for subsequent bounces
+                    ds, em_weight = self.sample_emitter(
+                        scene, si, initial_intersection_point, active_em, si_initial,
+                        camera_origin, camera_ray_direction, sampler)
+                else:
+                    # Shouldn't reach here, but fallback to standard sampling
+                    ds, em_weight = scene.sample_emitter_direction(
+                        si, sampler.next_2d(), True, active_em)
             else:
-                # Standard emitter sampling
+                # Standard emitter sampling (no projector, no confocal)
                 ds, em_weight = scene.sample_emitter_direction(
                     si, sampler.next_2d(), True, active_em)
 
