@@ -335,8 +335,8 @@ class TransientPath(TransientADIntegrator):
         normalized_y = direction_local.y / (-direction_local.z * tan_half_fov)
 
         # Convert to continuous pixel coordinates and clamp
-        pixel_x = dr.clip((normalized_x + 1.0) * 0.5 * self.projector_width, 0, self.projector_width - 1e-6)
-        pixel_y = dr.clip((normalized_y + 1.0) * 0.5 * self.projector_height, 0, self.projector_height - 1e-6)
+        pixel_x = dr.clip((normalized_x + 1.0) * 0.5 * self.projector_width, 0, self.projector_width - 1) + 0.5
+        pixel_y = dr.clip((normalized_y + 1.0) * 0.5 * self.projector_height, 0, self.projector_height - 1) + 0.5
 
         # Query texture and apply inverse square falloff
         projector_radiance = self.query_projector_texture(pixel_x, pixel_y)
@@ -372,10 +372,11 @@ class TransientPath(TransientADIntegrator):
                            0, num_pixels - 1)
 
         # Convert to x, y coordinates with sub-pixel sampling
-        pixel_y = pixel_idx // self.projector_width
-        pixel_x = pixel_idx % self.projector_width
-        subpixel_offset_x = sampler.next_1d()
-        subpixel_offset_y = sampler.next_1d()
+        pixel_y = (pixel_idx // self.projector_width) + 0.5
+        pixel_x = (pixel_idx % self.projector_width) + 0.5
+
+        subpixel_offset_x = sampler.next_1d() - 0.5
+        subpixel_offset_y = sampler.next_1d() - 0.5
 
         # Get pixel PMF value
         pmf_flat_dr = mi.Float(self.projector_pmf.flatten())
@@ -506,11 +507,10 @@ class TransientPath(TransientADIntegrator):
 
             distance[si.is_valid()] = -si.t
 
-        if self.use_confocal_light_source:
-            si_initial = scene.ray_intersect(mi.Ray3f(ray),
-                                            ray_flags=mi.RayFlags.All,
-                                            coherent=mi.Mask(True))
-            initial_intersection_point = si_initial.p
+        si_initial = scene.ray_intersect(mi.Ray3f(ray),
+                                        ray_flags=mi.RayFlags.All,
+                                        coherent=mi.Mask(True))
+        initial_intersection_point = si_initial.p
 
         while dr.hint(active,
                       max_iterations=self.max_depth,
@@ -559,23 +559,19 @@ class TransientPath(TransientADIntegrator):
             # Determine if we should use projector/confocal sampling
             has_projector = (self.projector_texture is not None and self.projector_pmf is not None)
 
-            if has_projector or self.use_confocal_light_source:
+            if has_projector:
                 # For initial intersection with projector: query directly
-                if has_projector and is_initial_intersection:
+                if is_initial_intersection:
                     # Use helper function that handles both direct query and PMF sampling
                     ds, em_weight = self.sample_emitter_with_projector(
                         scene, si, initial_intersection_point, active_em, si_initial,
                         camera_origin, camera_ray_direction, sampler, is_initial_intersection
                     )
-                elif has_projector or self.use_confocal_light_source:
+                else:
                     # Projector PMF sampling or confocal sampling for subsequent bounces
                     ds, em_weight = self.sample_emitter(
                         scene, si, initial_intersection_point, active_em, si_initial,
                         camera_origin, camera_ray_direction, sampler)
-                else:
-                    # Shouldn't reach here, but fallback to standard sampling
-                    ds, em_weight = scene.sample_emitter_direction(
-                        si, sampler.next_2d(), True, active_em)
             else:
                 # Standard emitter sampling (no projector, no confocal)
                 ds, em_weight = scene.sample_emitter_direction(
