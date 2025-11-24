@@ -253,9 +253,6 @@ class TransientPath(TransientADIntegrator):
                 scene, si, initial_intersection_point, active,
                 si_initial, camera_origin, camera_ray_direction, sampler
             )
-        elif self.use_confocal_light_source:
-            # Fall back to confocal sampling if no projector
-            return self.sample_emitter_confocal(scene, si, initial_intersection_point, active, si_initial)
         else:
             # This shouldn't be reached, but provide a safe fallback
             raise ValueError("sample_emitter called without projector or confocal mode enabled")
@@ -399,7 +396,7 @@ class TransientPath(TransientADIntegrator):
         # Transform to world space and find intersection
         projector_to_world = self.build_projector_frame(camera_ray_direction).T
         direction_world = projector_to_world @ direction_local
-        si_projector = scene.ray_intersect(mi.Ray3f(camera_origin, direction_world), mi.Bool(True))
+        si_projector = scene.ray_intersect(mi.Ray3f(camera_origin, direction_world), active)
 
         # Direction from current vertex to intersection point
         to_light = si_projector.p - si.p
@@ -414,7 +411,7 @@ class TransientPath(TransientADIntegrator):
         # Evaluate BSDF at the projector intersection point
         bsdf_ctx = mi.BSDFContext()
         wo_projector = si_projector.to_local(-to_light_normalized)
-        bsdf_value = si_projector.bsdf().eval(bsdf_ctx, si_projector, wo_projector, mi.Bool(True))
+        bsdf_value = si_projector.bsdf().eval(bsdf_ctx, si_projector, wo_projector, active)
         bsdf_value = si_projector.to_world_mueller(bsdf_value, -wo_projector, si_projector.wi)
 
         # Get projector radiance
@@ -433,7 +430,7 @@ class TransientPath(TransientADIntegrator):
         cos_theta_vertex = dr.abs(dr.dot(si_projector.n, to_light_normalized))
         d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(dist * dist, 1e-3)
 
-        pdf_weight = dr.clip(d_omega_vertex / dr.maximum(pixel_pmf, 1e-6), 1e-4, 10000.0)
+        pdf_weight = dr.clip(d_omega_vertex / dr.maximum(pixel_pmf, 1e-6), 0.0, 10000.0)
 
         # Fill in direction sample
         ds = dr.zeros(mi.DirectionSample3f)
@@ -444,41 +441,6 @@ class TransientPath(TransientADIntegrator):
         ds.delta = False
 
         em_weight = dr.select(is_visible, projector_radiance * bsdf_value * pdf_weight, mi.Spectrum(0.0))
-        return ds, em_weight
-
-    def sample_emitter_confocal(self,
-                                scene: mi.Scene,
-                                si: mi.SurfaceInteraction3f,
-                                initial_intersection_point: mi.Point3f,
-                                active: mi.Bool,
-                                si_initial: mi.SurfaceInteraction3f = None) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
-        """
-        Original confocal emitter sampling (fallback when no projector is configured).
-        """
-        # Create direction sample pointing to initial intersection
-        to_initial = initial_intersection_point - si.p
-        ds = dr.zeros(mi.DirectionSample3f)
-        ds.p = initial_intersection_point
-        ds.d = dr.normalize(to_initial)
-        ds.dist = dr.norm(to_initial)
-        ds.pdf = 1.0
-        ds.delta = True
-
-        # Visibility test
-        shadow_ray = mi.Ray3f(si.p + ds.d * 1e-4, ds.d)
-        si_shadow = scene.ray_intersect(shadow_ray, active)
-        is_visible = (dr.norm(si_shadow.p - initial_intersection_point) < 1e-4)
-
-        # Evaluate BSDF at initial intersection point
-        bsdf_ctx = mi.BSDFContext()
-        wo_initial = si_initial.to_local(-ds.d)
-        bsdf_value = si_initial.bsdf().eval(bsdf_ctx, si_initial, wo_initial, active)
-        bsdf_value = si_initial.to_world_mueller(bsdf_value, -wo_initial, si_initial.wi)
-
-        # Apply inverse square falloff
-        falloff = dr.minimum(dr.rcp(dr.maximum(ds.dist * ds.dist, 1e-6)), 10000.0)
-
-        em_weight = dr.select(is_visible, bsdf_value * mi.Spectrum(falloff), mi.Spectrum(0.0))
         return ds, em_weight
 
     @dr.syntax
@@ -550,8 +512,6 @@ class TransientPath(TransientADIntegrator):
                                             coherent=mi.Mask(True))
             initial_intersection_point = si_initial.p
 
-            distance[si_initial.is_valid()] += si_initial.t
-
         while dr.hint(active,
                       max_iterations=self.max_depth,
                       label="Transient Path (%s)" % mode.name):
@@ -579,43 +539,7 @@ class TransientPath(TransientADIntegrator):
 
             # Compute MIS weight for emitter sample from previous bounce
             ds = mi.DirectionSample3f(scene, si=si, ref=prev_si)
-
-            mis = mis_weight(
-                prev_bsdf_pdf,
-                scene.pdf_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
-            )
-
-            with dr.resume_grad(when=not primal):
-                Le = β * mi.Spectrum(mis) * \
-                    dr.select(self.discard_direct_light, 0,
-                              ds.emitter.eval(si, active_next))
-
-            if self.use_nlos_only:
-                # Check if current point is directly visible from camera
-                # Cast ray from camera toward current intersection point
-                point_direction = dr.normalize(si.p - camera_origin)
-                visibility_ray_origin = camera_origin
-                visibility_ray = mi.Ray3f(visibility_ray_origin, point_direction)
-
-                # Check if ray from camera hits the current point without hitting other geometry
-                si_visibility = scene.ray_intersect(visibility_ray, mi.Bool(True))
-
-                # Point is directly visible if the ray hits the current point (within epsilon)
-                # Check that the hit point is very close to si.p
-                epsilon_distance = 1e-4
-                is_directly_visible = si_visibility.is_valid() & (dr.norm(si_visibility.p - si.p) < epsilon_distance)
-
-                # Update tracking: if this point is NOT directly visible, mark that we've hit an NLOS point
-                has_hit_nlos_point |= ~is_directly_visible
-
-                # Zero out contributions if point is directly visible AND we haven't hit an NLOS point yet
-                should_zero_contribution = ~has_hit_nlos_point
-                Le = dr.select(should_zero_contribution, mi.Spectrum(0.0), Le)
-                L = dr.select(should_zero_contribution, mi.Spectrum(0.0), L)
-
-            # Add transient contribution because of emitter found
-            if primal:
-                add_transient(Le, distance, ray.wavelengths, active)
+            Le = mi.Float(0.0)
 
             # ---------------------- Emitter sampling ----------------------
 
