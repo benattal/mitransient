@@ -340,7 +340,7 @@ class TransientPath(TransientADIntegrator):
 
         # Query texture and apply inverse square falloff
         projector_radiance = self.query_projector_texture(pixel_x, pixel_y)
-        falloff = dr.minimum(dr.rcp(dr.maximum(dist * dist, 1e-6)), 10000.0)
+        falloff = dr.minimum(dr.rcp(dr.maximum(dist * dist, 1e-3)), 10000.0)
 
         # Create direction sample pointing toward projector
         ds = dr.zeros(mi.DirectionSample3f)
@@ -348,7 +348,7 @@ class TransientPath(TransientADIntegrator):
         ds.d = to_projector_normalized
         ds.dist = dist
         ds.pdf = 1.0
-        ds.delta = True
+        ds.delta = False
 
         return ds, mi.Spectrum(projector_radiance * falloff)
 
@@ -398,6 +398,7 @@ class TransientPath(TransientADIntegrator):
         projector_to_world = self.build_projector_frame(camera_ray_direction).T
         direction_world = projector_to_world @ direction_local
         si_projector = scene.ray_intersect(mi.Ray3f(camera_origin, direction_world), active)
+        dist_projector = dr.norm(si_projector.p - camera_origin)
 
         # Direction from current vertex to intersection point
         to_light = si_projector.p - si.p
@@ -406,7 +407,7 @@ class TransientPath(TransientADIntegrator):
 
         # Check visibility
         shadow_ray = mi.Ray3f(si.p + to_light_normalized * 1e-4, to_light_normalized)
-        si_shadow = scene.ray_intersect(shadow_ray, mi.Bool(True))
+        si_shadow = scene.ray_intersect(shadow_ray, active)
         is_visible = (dr.norm(si_shadow.p - si_projector.p) < 1e-4)
 
         # Evaluate BSDF at the projector intersection point
@@ -420,6 +421,7 @@ class TransientPath(TransientADIntegrator):
             mi.Float(pixel_x) + subpixel_offset_x,
             mi.Float(pixel_y) + subpixel_offset_y
         )
+        projector_radiance = 1.0
 
         # Compute PDF weight (convert from projector solid angle to vertex solid angle)
         pixel_area_normalized = (2.0 / self.projector_width) * (2.0 / self.projector_height)
@@ -428,7 +430,7 @@ class TransientPath(TransientADIntegrator):
         cos_theta_projector = dr.abs(dr.dot(si_projector.n, -direction_world))
         d_area = d_omega_projector / dr.maximum(cos_theta_projector, 1e-6)
 
-        cos_theta_vertex = dr.abs(dr.dot(si_projector.n, to_light_normalized))
+        cos_theta_vertex = dr.abs(dr.dot(si_projector.n, -to_light_normalized))
         d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(dist * dist, 1e-3)
 
         pdf_weight = dr.clip(d_omega_vertex / dr.maximum(pixel_pmf, 1e-6), 0.0, 10000.0)
@@ -437,11 +439,15 @@ class TransientPath(TransientADIntegrator):
         ds = dr.zeros(mi.DirectionSample3f)
         ds.p = si_projector.p
         ds.d = to_light_normalized
-        ds.dist = dist + si_projector.t
+        ds.dist = dist + dist_projector
         ds.pdf = 1.0 / pdf_weight
         ds.delta = False
 
-        em_weight = dr.select(is_visible, projector_radiance * bsdf_value * pdf_weight, mi.Spectrum(0.0))
+        em_weight = dr.select(
+            is_visible & active,
+            projector_radiance * bsdf_value * pdf_weight,
+            mi.Spectrum(0.0)
+        )
         return ds, em_weight
 
     @dr.syntax
@@ -594,9 +600,7 @@ class TransientPath(TransientADIntegrator):
                 bsdf_value_em, bsdf_pdf_em = bsdf.eval_pdf(
                     bsdf_ctx, si, wo, active_em)
                 bsdf_value_em = si.to_world_mueller(bsdf_value_em, -wo, si.wi)
-                mis_em = dr.select(
-                    ds.delta, 1, mis_weight(ds.pdf, bsdf_pdf_em))
-                Lr_dir = β * mi.Spectrum(mis_em) * bsdf_value_em * em_weight
+                Lr_dir = β * bsdf_value_em * em_weight
 
             if self.use_nlos_only:
                 # Check if current point is directly visible from camera

@@ -8,6 +8,7 @@ from mitsuba import (
     TensorXf,
 )
 import drjit as dr
+import numpy as np
 
 from mitransient.render.transient_image_block import TransientImageBlock
 
@@ -240,7 +241,7 @@ class TransientHDRFilm(mi.Film):
 
         # Create kernel based on filter type
         # Kernel size should be large enough to capture the filter
-        kernel_size = self.temporal_bins
+        kernel_size = min(2 * int(np.round(self.gaussian_stddev)) + 1, self.temporal_bins)
         kernel = self._create_pulse_kernel(self.temporal_filter, self.gaussian_stddev, kernel_size)
 
         # Vectorized convolution along temporal dimension
