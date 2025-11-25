@@ -1,0 +1,105 @@
+<scene version="3.3.0">
+
+	<default name="integrator" value="transient_path"/>
+	<default name="spp" value="4096" />
+	<default name="resx" value="256" />
+	<default name="resy" value="256" />
+
+	<!-- Transient Integrator with Confocal Projector -->
+    <integrator type='$integrator'>
+      <boolean name="camera_unwarp" value="false"/>
+      <boolean name="use_nlos_only" value="false"/>
+      <integer name="max_depth" value="8"/>
+      <string name="temporal_filter" value="box"/>
+      <float name="gaussian_stddev" value="2.0"/>
+
+      <!-- Confocal Projector: single spot with sigma=0.001 -->
+      <emitter type="confocal_projector" name="confocal_projector">
+        <integer name="grid_rows" value="1"/>
+        <integer name="grid_cols" value="1"/>
+        <float name="grid_sigma" value="0.001"/>
+        <float name="grid_intensity" value="100000.0"/>
+        <string name="grid_spacing" value="uniform"/>
+        <float name="fov" value="0.55"/>
+        <boolean name="is_confocal" value="true"/>
+        <integer name="max_rejection_samples" value="4"/>
+      </emitter>
+    </integrator>
+
+    <sensor type="perspective" id="sensor">
+        <string name="fov_axis" value="smaller"/>
+        <float name="near_clip" value="0.100000" />
+		<float name="far_clip" value="15000.000000" />
+        <float name="fov" value="39.3077"/>
+        <transform name="to_world">
+			<matrix value="0.7431448254773944, 0.0445099058461641, -0.6676485876924616, 1.1016201696925616, -0.0, 0.9977851578566088, 0.0665190105237739, 0.24024363263577303, 0.6691306063588581, -0.04943325846661892, 0.741498876999284, -1.2234731470488185, -0.0, 0.0, -0.0, 1.0" />
+		</transform>
+        <sampler type="independent">
+            <integer name="sample_count" value="$spp"/>
+        </sampler>
+        <!-- Transient Film -->
+        <film type="transient_hdr_film">
+            <integer name="width"  value="$resx"/>
+            <integer name="height" value="$resy"/>
+            <integer name="temporal_bins" value="700"/>
+            <float name="start_opl" value="0"/>
+            <float name="bin_width_opl" value="0.01"/>
+            <rfilter type="box"/>
+        </film>
+    </sensor>
+
+	<bsdf type="diffuse" id="mat-checker">
+		<rgb value="1.000000 0.000000 0.300000" name="reflectance" />
+	</bsdf>
+	<bsdf type="diffuse" id="mat-clouds">
+		<rgb value="1.000000 0.000000 0.300000" name="reflectance" />
+	</bsdf>
+	<bsdf type="twosided" id="mat-diffuse.red">
+		<bsdf type="diffuse">
+			<rgb value="0.800000 0.027385 0.024276" name="reflectance" />
+		</bsdf>
+	</bsdf>
+	<bsdf type="twosided" id="mat-diffuse.green">
+		<bsdf type="diffuse">
+			<rgb value="0.011137 0.288296 0.019637" name="reflectance" />
+		</bsdf>
+	</bsdf>
+	<bsdf type="twosided" id="mat-diffuse.white">
+		<bsdf type="diffuse">
+			<rgb value="1.000000 1.000000 1.000000" name="reflectance" />
+		</bsdf>
+	</bsdf>
+	<bsdf type="diffuse" id="empty-emitter-bsdf">
+		<rgb value="0.000000" name="reflectance" />
+	</bsdf>
+	<bsdf type="diffuse" id="mat-torus">
+		<rgb value="1.000000 0.000000 0.300000" name="reflectance" />
+	</bsdf>
+
+	<shape type="obj">
+		<string name="filename" value="meshes/left-wall.obj" />
+		<boolean name="face_normals" value="true" />
+		<ref id="mat-diffuse.red" name="bsdf" />
+	</shape>
+	<shape type="obj">
+		<string name="filename" value="meshes/back-wall.obj" />
+		<boolean name="face_normals" value="true" />
+		<ref id="mat-diffuse.green" name="bsdf" />
+	</shape>
+	<shape type="obj">
+		<string name="filename" value="meshes/floor.obj" />
+		<boolean name="face_normals" value="true" />
+		<ref id="mat-diffuse.white" name="bsdf" />
+	</shape>
+	<shape type="ply">
+		<string name="filename" value="meshes/box_short.ply" />
+		<boolean name="face_normals" value="true" />
+		<ref id="mat-diffuse.white" name="bsdf" />
+	</shape>
+	<shape type="ply">
+		<string name="filename" value="meshes/box_tall.ply" />
+		<boolean name="face_normals" value="true" />
+		<ref id="mat-diffuse.white" name="bsdf" />
+	</shape>
+
+</scene>
