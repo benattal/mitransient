@@ -21,7 +21,7 @@
         <float name="grid_intensity" value="100000.0"/>
         <string name="grid_spacing" value="uniform"/>
         <float name="fov" value="0.55"/>
-        <boolean name="is_confocal" value="false"/>
+        <boolean name="is_confocal" value="true"/>
         <integer name="max_rejection_samples" value="4"/>
         <!-- Projector frame aligned with camera (same as camera to_world) -->
         <transform name="frame">
