@@ -66,8 +66,9 @@ class ConfocalProjector(mi.Emitter):
 
      * - frame
        - |transform|
-       - 3x3 rotation matrix defining the projector's coordinate frame.
-         Columns represent [right, up, forward] vectors in world space.
+       - 4x4 transformation matrix defining the projector's pose.
+         Contains both rotation (3x3 upper-left) and position (last column).
+         Columns of the rotation part represent [right, up, forward] vectors.
          Only used when is_confocal=False. (default: None)
 
      * - max_rejection_samples
@@ -118,8 +119,25 @@ class ConfocalProjector(mi.Emitter):
         # Core parameters
         self.is_confocal = props.get("is_confocal", True)
         self.fov = props.get("fov", 0.2)
-        self.frame = props.get("frame", None)
         self.max_rejection_samples = props.get("max_rejection_samples", 8)
+
+        # Store frame: extract rotation matrix and translation from Transform4f
+        frame = props.get("frame", None)
+        if frame is not None:
+            m = frame.matrix
+            # Extract 3x3 rotation (columns: right, up, forward)
+            self.rotation = mi.Matrix3f(
+                mi.Vector3f(m[0, 0], m[0, 1], -m[0, 2]),
+                mi.Vector3f(m[1, 0], m[1, 1], -m[1, 2]),
+                mi.Vector3f(m[2, 0], m[2, 1], -m[2, 2])
+            )
+            self.rotation_inv = self.rotation.T  # Transpose for orthonormal rotation
+            # Extract translation (position)
+            self.origin = mi.Point3f(m[0, 3], m[1, 3], m[2, 3])
+        else:
+            self.rotation = None
+            self.rotation_inv = None
+            self.origin = None
 
         # Check for explicit spot mode
         spot_positions = props.get("spot_positions", None)
@@ -309,34 +327,28 @@ class ConfocalProjector(mi.Emitter):
 
         return spot_idx, sample_x, sample_y, pdf
 
-    def build_frame(self, camera_ray_direction: mi.Vector3f = None) -> mi.Matrix3f:
+    def build_frame(self, camera_origin: mi.Point3f, camera_ray_direction: mi.Vector3f) -> Tuple[mi.Matrix3f, mi.Matrix3f, mi.Point3f]:
         """
-        Build orthonormal frame for projector.
-
-        If is_confocal is False and frame was provided in constructor,
-        returns that stored frame. Otherwise, builds a frame aligned with
-        the camera ray direction.
+        Build projector frame for confocal mode.
 
         Args:
-            camera_ray_direction: Initial camera ray direction (required when
-                                  computing frame dynamically)
+            camera_origin: Camera/projector origin position
+            camera_ray_direction: Initial camera ray direction
 
         Returns:
-            3x3 rotation matrix (columns: right, up, forward)
+            Tuple of (rotation, rotation_inv, origin)
+            - rotation: 3x3 matrix (columns: right, up, forward) for local-to-world
+            - rotation_inv: transpose of rotation for world-to-local
+            - origin: projector position
         """
-        # Only use stored projector frame when NOT in confocal mode
-        if not self.is_confocal and self.frame is not None:
-            return self.frame
-
-        # Otherwise, compute from camera ray direction (for confocal mode or when frame not provided)
-        if camera_ray_direction is None:
-            raise ValueError("camera_ray_direction required when frame is not set or in confocal mode")
-
         camera_forward = -camera_ray_direction
         camera_up = mi.Vector3f(0.0, 1.0, 0.0)
         camera_right = dr.normalize(dr.cross(camera_forward, camera_up))
         camera_up = dr.normalize(dr.cross(camera_right, camera_forward))
-        return mi.Matrix3f(camera_right, camera_up, camera_forward)
+
+        rotation = mi.Matrix3f(camera_right, camera_up, camera_forward).T
+        rotation_inv = rotation.T
+        return rotation, rotation_inv, camera_origin
 
     def query_direct(self,
                      scene: mi.Scene,
@@ -359,14 +371,20 @@ class ConfocalProjector(mi.Emitter):
             ds: Direction sample toward the projector
             em_weight: Weight including radiance with inverse square falloff
         """
+        # Get rotation matrices and origin: use stored or build dynamically for confocal mode
+        if not self.is_confocal and self.rotation is not None:
+            rotation_inv = self.rotation_inv
+            projector_origin = self.origin
+        else:
+            _, rotation_inv, projector_origin = self.build_frame(camera_origin, camera_ray_direction)
+
         # Direction from intersection point to projector
-        to_projector = camera_origin - si.p
+        to_projector = projector_origin - si.p
         dist = dr.norm(to_projector)
         to_projector_normalized = dr.normalize(to_projector)
 
-        # Transform incoming direction to projector local space
-        world_to_projector = self.build_frame(camera_ray_direction)
-        direction_local = world_to_projector @ (-to_projector_normalized)
+        # Transform direction to projector local space using rotation_inv (world-to-local)
+        direction_local = rotation_inv @ (-to_projector_normalized)
 
         # Convert to normalized coordinates [-1, 1]
         tan_half_fov = dr.tan(self.fov / 2.0)
@@ -381,7 +399,7 @@ class ConfocalProjector(mi.Emitter):
 
         # Create direction sample pointing toward projector
         ds = dr.zeros(mi.DirectionSample3f)
-        ds.p = camera_origin
+        ds.p = projector_origin
         ds.d = to_projector_normalized
         ds.dist = dist
         ds.pdf = 1.0
@@ -414,6 +432,13 @@ class ConfocalProjector(mi.Emitter):
             ds: Direction sample toward the illuminated point
             em_weight: Weight including BRDF, radiance, and PDF
         """
+        # Get rotation matrix and origin: use stored or build dynamically for confocal mode
+        if not self.is_confocal and self.rotation is not None:
+            rotation = self.rotation
+            projector_origin = self.origin
+        else:
+            rotation, _, projector_origin = self.build_frame(camera_origin, camera_ray_direction)
+
         # Sample a point from the parametric projector
         spot_idx, normalized_x, normalized_y, sample_pdf = self.sample_spot(sampler)
 
@@ -425,11 +450,12 @@ class ConfocalProjector(mi.Emitter):
             -1.0
         ))
 
-        # Transform to world space and find intersection
-        projector_to_world = self.build_frame(camera_ray_direction).T
-        direction_world = projector_to_world @ direction_local
-        si_projector = scene.ray_intersect(mi.Ray3f(camera_origin, direction_world), active)
-        dist_projector = dr.norm(si_projector.p - camera_origin)
+        # Transform to world space using rotation matrix (local-to-world)
+        direction_world = rotation @ direction_local
+
+        # Find intersection from projector
+        si_projector = scene.ray_intersect(mi.Ray3f(projector_origin, direction_world), active)
+        dist_projector = dr.norm(si_projector.p - projector_origin)
 
         # Direction from current vertex to the illuminated point
         to_light = si_projector.p - si.p
@@ -512,6 +538,9 @@ class ConfocalProjector(mi.Emitter):
         string += f"  fov = {self.fov},\n"
         string += f"  num_spots = {self.num_spots},\n"
         string += f"  max_rejection_samples = {self.max_rejection_samples},\n"
+        if self.origin is not None:
+            string += f"  origin = {self.origin},\n"
+            string += f"  rotation = {self.rotation},\n"
         string += f"]"
         return string
 

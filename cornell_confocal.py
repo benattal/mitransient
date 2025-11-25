@@ -40,19 +40,29 @@ d['sensor']['film']['temporal_bins'] = 1000
 d['sensor']['film']['width'] = 256
 d['sensor']['film']['height'] = 256
 
-# Create the ConfocalProjector emitter (single spot, same spread as in cornell_confocal.ipynb)
-# sigma=0.001, intensity=100000.0 (single spot), fov=0.55, is_confocal=True
-projector = mi.load_dict({
+# Get camera transform from cornell_box scene
+sensor_dict = d['sensor']
+camera_to_world = sensor_dict['to_world']
+
+# Build projector frame as full 4x4 Transform4f (same as camera to_world)
+# For non-confocal mode, we need to pass the frame explicitly
+projector_dict = {
     "type": "confocal_projector",
     "grid_rows": 1,
-    "grid_cols": 1,
+    "grid_cols": 3 if not is_confocal else 1,
     "grid_sigma": 0.001,
     "grid_intensity": 100000.0,
     "grid_spacing": "uniform",
     "fov": 0.55,
-    "is_confocal": is_confocal,  # Confocal mode - frame computed dynamically from camera ray
+    "is_confocal": is_confocal,
     "max_rejection_samples": 4,
-})
+}
+
+# Add frame transform for non-confocal mode
+if not is_confocal:
+    projector_dict["frame"] = camera_to_world
+
+projector = mi.load_dict(projector_dict)
 
 print(f"Confocal projector created:")
 print(projector.to_string())
