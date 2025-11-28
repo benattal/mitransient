@@ -18,7 +18,7 @@
         <integer name="grid_rows" value="1"/>
         <integer name="grid_cols" value="1"/>
         <float name="grid_sigma" value="0.001"/>
-        <float name="grid_intensity" value="100000.0"/>
+        <float name="grid_intensity" value="100.0"/>
         <string name="grid_spacing" value="uniform"/>
         <float name="fov" value="0.55"/>
         <boolean name="is_confocal" value="true"/>

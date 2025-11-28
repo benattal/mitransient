@@ -51,7 +51,7 @@ projector_dict = {
     "grid_rows": 1,
     "grid_cols": 3 if not is_confocal else 1,
     "grid_sigma": 0.001,
-    "grid_intensity": 100000.0,
+    "grid_intensity": 100.0,
     "grid_spacing": "uniform",
     "fov": 0.55,
     "is_confocal": is_confocal,

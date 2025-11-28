@@ -148,7 +148,6 @@ class TransientPath(TransientADIntegrator):
         prev_bsdf_delta = mi.Bool(True)
 
         # Store initial camera ray intersection for NLOS light source mode
-        initial_intersection_point = mi.Point3f(0.0)
         si_initial = dr.zeros(mi.SurfaceInteraction3f)
         camera_origin = mi.Point3f(ray.o)  # Store camera origin for NLOS-only check
         camera_ray_direction = mi.Vector3f(ray.d)  # Store initial camera ray direction
@@ -168,7 +167,6 @@ class TransientPath(TransientADIntegrator):
         si_initial = scene.ray_intersect(mi.Ray3f(ray),
                                         ray_flags=mi.RayFlags.All,
                                         coherent=mi.Mask(True))
-        initial_intersection_point = si_initial.p
 
         while dr.hint(active,
                       max_iterations=self.max_depth,

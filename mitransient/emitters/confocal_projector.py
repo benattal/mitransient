@@ -327,13 +327,14 @@ class ConfocalProjector(mi.Emitter):
 
         return spot_idx, sample_x, sample_y, pdf
 
-    def build_frame(self, camera_origin: mi.Point3f, camera_ray_direction: mi.Vector3f) -> Tuple[mi.Matrix3f, mi.Matrix3f, mi.Point3f]:
+    def build_frame(self, camera_origin: mi.Point3f, camera_ray_direction: mi.Vector3f, camera_up: mi.Vector3f = None) -> Tuple[mi.Matrix3f, mi.Matrix3f, mi.Point3f]:
         """
         Build projector frame for confocal mode.
 
         Args:
             camera_origin: Camera/projector origin position
             camera_ray_direction: Initial camera ray direction
+            camera_up: Optional up vector for the camera frame. If None, defaults to (0, 1, 0).
 
         Returns:
             Tuple of (rotation, rotation_inv, origin)
@@ -342,7 +343,8 @@ class ConfocalProjector(mi.Emitter):
             - origin: projector position
         """
         camera_forward = -camera_ray_direction
-        camera_up = mi.Vector3f(0.0, 1.0, 0.0)
+        if camera_up is None:
+            camera_up = mi.Vector3f(0.0, 1.0, 0.0)
         camera_right = dr.normalize(dr.cross(camera_forward, camera_up))
         camera_up = dr.normalize(dr.cross(camera_right, camera_forward))
 
@@ -355,7 +357,8 @@ class ConfocalProjector(mi.Emitter):
                      si: mi.SurfaceInteraction3f,
                      camera_origin: mi.Point3f,
                      camera_ray_direction: mi.Vector3f,
-                     active: mi.Bool) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
+                     active: mi.Bool,
+                     camera_up: mi.Vector3f = None) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
         """
         Query incoming radiance directly from the parametric projector for the initial
         intersection point. Uses inverse square falloff, no importance sampling.
@@ -366,6 +369,7 @@ class ConfocalProjector(mi.Emitter):
             camera_origin: Camera origin point (projector position)
             camera_ray_direction: Initial camera ray direction
             active: Active mask
+            camera_up: Optional up vector for the camera frame. If None, uses the scene sensor's up vector.
 
         Returns:
             ds: Direction sample toward the projector
@@ -376,7 +380,14 @@ class ConfocalProjector(mi.Emitter):
             rotation_inv = self.rotation_inv
             projector_origin = self.origin
         else:
-            _, rotation_inv, projector_origin = self.build_frame(camera_origin, camera_ray_direction)
+            # Extract up vector from scene sensor if not provided
+            if camera_up is None:
+                sensor = scene.sensors()[0]
+                to_world = sensor.world_transform()
+                # Up vector is the second column (y-axis) of the rotation part
+                m = to_world.matrix
+                camera_up = mi.Vector3f(m[0, 1], m[1, 1], m[2, 1])
+            _, rotation_inv, projector_origin = self.build_frame(camera_origin, camera_ray_direction, camera_up)
 
         # Direction from intersection point to projector
         to_projector = projector_origin - si.p
@@ -413,7 +424,8 @@ class ConfocalProjector(mi.Emitter):
                        camera_origin: mi.Point3f,
                        camera_ray_direction: mi.Vector3f,
                        sampler: mi.Sampler,
-                       active: mi.Bool) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
+                       active: mi.Bool,
+                       camera_up: mi.Vector3f = None) -> Tuple[mi.DirectionSample3f, mi.Spectrum]:
         """
         Sample emitter using parametric Gaussian spot importance sampling.
 
@@ -427,6 +439,7 @@ class ConfocalProjector(mi.Emitter):
             camera_ray_direction: Initial camera ray direction
             sampler: Sampler for random numbers
             active: Active mask
+            camera_up: Optional up vector for the camera frame. If None, uses the scene sensor's up vector.
 
         Returns:
             ds: Direction sample toward the illuminated point
@@ -437,7 +450,14 @@ class ConfocalProjector(mi.Emitter):
             rotation = self.rotation
             projector_origin = self.origin
         else:
-            rotation, _, projector_origin = self.build_frame(camera_origin, camera_ray_direction)
+            # Extract up vector from scene sensor if not provided
+            if camera_up is None:
+                sensor = scene.sensors()[0]
+                to_world = sensor.world_transform()
+                # Up vector is the second column (y-axis) of the rotation part
+                m = to_world.matrix
+                camera_up = mi.Vector3f(m[0, 1], m[1, 1], m[2, 1])
+            rotation, _, projector_origin = self.build_frame(camera_origin, camera_ray_direction, camera_up)
 
         # Sample a point from the parametric projector
         spot_idx, normalized_x, normalized_y, sample_pdf = self.sample_spot(sampler)
