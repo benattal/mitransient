@@ -16,7 +16,7 @@ from mitransient.emitters.confocal_projector import ConfocalProjector
 parser = argparse.ArgumentParser(description='Render transient scene from XML file')
 parser.add_argument('scene_file', type=str,
                     help='Path to the XML scene file')
-parser.add_argument('--spp', type=int, default=10000,
+parser.add_argument('--spp', type=int, default=100000,
                     help='Samples per pixel (default: 100000)')
 parser.add_argument('--clip-max', type=float, default=10.0,
                     help='Maximum clipping value for tonemapping (default: 10.0)')

@@ -79,6 +79,10 @@
 	<bsdf type="diffuse" id="mat-torus">
 		<rgb value="1.000000 0.000000 0.300000" name="reflectance" />
 	</bsdf>
+	<!-- Red material for hidden object -->
+	<bsdf type="diffuse" id="mat-diffuse.hidden">
+		<rgb value="0.8 0.8 0.8" name="reflectance" />
+	</bsdf>
 
 	<shape type="obj">
 		<string name="filename" value="meshes/left-wall.obj" />
@@ -104,6 +108,15 @@
 		<string name="filename" value="meshes/box_tall.ply" />
 		<boolean name="face_normals" value="true" />
 		<ref id="mat-diffuse.white" name="bsdf" />
+	</shape>
+
+	<!-- Hidden sphere at corner of both walls -->
+	<!-- Back wall (green) at X=-0.5, Left wall (red) at Z=0.5 -->
+	<!-- Center offset by radius to not clip walls -->
+	<shape type="sphere">
+		<point name="center" x="-0.38" y="0.34" z="0.38"/>
+		<float name="radius" value="0.09"/>
+		<ref id="mat-diffuse.hidden" name="bsdf" />
 	</shape>
 
 </scene>
