@@ -1,8 +1,16 @@
 # Wall-Box-Sphere NLOS Example
 
-This guide demonstrates rendering and backprojection reconstruction on the `wall_box_sphere_nlos` scene - a simple NLOS scene with a relay wall, a box, and a green sphere.
+This guide demonstrates rendering and backprojection reconstruction on NLOS scenes with a relay wall and hidden objects.
 
-## Scene Overview
+Two scene variants are provided:
+- `wall_box_sphere_nlos.xml` - Relay wall + red box + green sphere
+- `wall_box_nlos.xml` - Relay wall + red box only (no sphere)
+
+---
+
+## Scene 1: Wall-Box-Sphere (with sphere)
+
+### Scene Overview
 
 The scene (`scenes/wall_box_sphere_nlos.xml`) contains:
 
@@ -114,3 +122,50 @@ python direct_backprojection.py results/wall_box_sphere_nlos_transient.npy \
    ```bash
    python render_transient.py scenes/wall_box_sphere_nlos.xml --spp 200000 --clip-max 0.001
    ```
+
+---
+
+## Scene 2: Wall-Box (without sphere)
+
+### Scene Overview
+
+The scene (`scenes/wall_box_nlos.xml`) is identical to `wall_box_sphere_nlos.xml` but **without the green sphere**. This allows you to verify that the backprojection correctly reconstructs only the objects present in the scene.
+
+The scene contains:
+- **Camera** at origin, looking down -Z axis (45° FOV)
+- **Relay wall** at z=-2.0 (4m × 4m gray rectangle)
+- **Hidden objects**:
+  - Red box (floor-like surface at y=-2.0)
+  - ~~Green sphere~~ (removed)
+- **Confocal projector** emitter for NLOS capture
+
+### Render Transient Data
+
+```bash
+python render_transient.py scenes/wall_box_nlos.xml --clip-max 0.001
+```
+
+### Run Backprojection
+
+```bash
+python direct_backprojection.py results/wall_box_nlos_transient.npy \
+    --scene-file scenes/wall_box_nlos.xml \
+    --voxel-resolution 128 \
+    --volume-min -1 -1 -0.9 \
+    --volume-max 1 0 0 \
+    --bin-threshold 0.01 \
+    --min-relay-distance 0.01 \
+    --vis-transform none \
+    --no-hemisphere-filter
+```
+
+### Expected Results
+
+When comparing the reconstructions:
+
+| Scene | Reconstruction |
+|-------|----------------|
+| `wall_box_sphere_nlos` | Red box + **green sphere visible** |
+| `wall_box_nlos` | Red box only, **no green spot** |
+
+This comparison validates that the backprojection algorithm correctly reconstructs only the geometry present in the scene, and that the green spot in the first reconstruction genuinely corresponds to the sphere rather than being an artifact.
