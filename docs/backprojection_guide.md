@@ -266,6 +266,7 @@ Coordinates are in meters: `(x_min, y_min, z_min)` and `(x_max, y_max, z_max)`.
 | `--bin-threshold` | 0.0 | Only use bins above this fraction of max (0.0-1.0) |
 | `--min-relay-distance` | 0.0 | Skip voxels closer than this to relay (meters) |
 | `--no-falloff` | off | Disable distance falloff weighting |
+| `--no-hemisphere-filter` | off | Disable hemisphere filtering (by default, only voxels in the positive normal hemisphere contribute) |
 | `--output-dir` | `vis/` | Output directory |
 | `--output-name` | auto | Output filename prefix |
 

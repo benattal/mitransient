@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <scene version="3.0.0">
-    <!-- Camera at origin, looking down -Z -->
+    <!-- Camera at origin, looking down -Z toward the wall -->
     <sensor type="perspective">
         <string name="fov_axis" value="smaller"/>
         <float name="fov" value="45"/>
@@ -14,7 +14,7 @@
             <integer name="height" value="128"/>
             <integer name="temporal_bins" value="1000"/>
             <float name="bin_width_opl" value="0.01"/>
-            <float name="start_opl" value="0.5"/>
+            <float name="start_opl" value="0.0"/>
             <rfilter type="box"/>
         </film>
 
@@ -23,13 +23,13 @@
         </sampler>
     </sensor>
 
-    <!-- Integrator -->
+    <!-- Integrator with confocal projector -->
     <integrator type="transient_path">
         <boolean name="camera_unwarp" value="false"/>
         <boolean name="use_nlos_only" value="false"/>
         <integer name="max_depth" value="8"/>
         <string name="temporal_filter" value="box"/>
-        <float name="gaussian_stddev" value="2.0"/>
+        <float name="gaussian_stddev" value="10.0"/>
 
         <emitter type="confocal_projector" name="confocal_projector">
             <integer name="grid_rows" value="1"/>
@@ -43,10 +43,10 @@
         </emitter>
     </integrator>
 
-    <!-- Wall in front of camera at z=-3, perpendicular to view direction -->
+    <!-- Relay wall at z=-1.5, facing +Z (toward camera) -->
     <shape type="rectangle">
         <transform name="to_world">
-            <scale x="2" y="2" z="1"/>
+            <scale x="2.0" y="2.0" z="1.0"/>
             <translate x="0" y="0" z="-2.0"/>
         </transform>
         <bsdf type="diffuse">
@@ -54,14 +54,21 @@
         </bsdf>
     </shape>
 
-    <!-- Box behind the camera at z=+2 -->
     <shape type="cube">
         <transform name="to_world">
-            <scale x="0.5" y="0.5" z="0.001"/>
-            <translate x="0.0" y="0.0" z="0.25"/>
+            <scale x="2.0" y="2.0" z="0.25"/>
+            <translate x="0.0" y="-2.0" z="-0.5"/>
         </transform>
         <bsdf type="diffuse">
-            <rgb name="reflectance" value="0.5, 0.5, 0.5"/>
+            <rgb name="reflectance" value="0.2, 0.0, 0.0"/>
+        </bsdf>
+    </shape>
+
+    <shape type="sphere">
+        <point name="center" x="0.0" y="-0.75" z="-0.75"/>
+        <float name="radius" value="0.25"/>
+        <bsdf type="diffuse">
+            <rgb name="reflectance" value="0.0, 0.8, 0.0"/>
         </bsdf>
     </shape>
 </scene>

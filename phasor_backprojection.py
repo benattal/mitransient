@@ -100,6 +100,8 @@ def parse_args():
                         help='Only splat to voxels whose corresponding time bin has indirect signal above this fraction of the relay point\'s max (0.0-1.0, default: 0.0 = no threshold)')
     parser.add_argument('--min-relay-distance', type=float, default=0.0,
                         help='Minimum distance from relay point to voxel for contribution (meters, default: 0.0)')
+    parser.add_argument('--no-hemisphere-filter', action='store_true',
+                        help='Disable hemisphere filtering based on relay wall normals. By default, only voxels in the positive normal hemisphere (away from camera) contribute.')
     parser.add_argument('--output-dir', type=str, default='vis/',
                         help='Output directory (default: vis/)')
     parser.add_argument('--output-name', type=str, default=None,
@@ -383,7 +385,7 @@ def load_transient(path, return_rgb=False):
     return luminance.astype(np.float32)
 
 
-def detect_direct_peaks(transient, start_opl, bin_width, threshold_percentile=95, peak_width=20,
+def detect_direct_peaks(transient, start_opl, bin_width, threshold_percentile=95, peak_width=5,
                         min_signal_threshold=None):
     """
     Detect direct reflection peaks to recover relay wall depth (vectorized).
@@ -1713,17 +1715,21 @@ def main():
     else:
         print(f"  WARNING: No valid relay positions!")
 
-    # Compute relay wall normals
-    print("\n  Computing relay wall normals...")
-    camera_origin = scene_params['camera_origin']
-    relay_normals = compute_relay_normals(relay_pos, camera_origin)
-    print(f"  Normal range: X=[{relay_normals[:,:,0].min():.3f}, {relay_normals[:,:,0].max():.3f}]")
-    print(f"                Y=[{relay_normals[:,:,1].min():.3f}, {relay_normals[:,:,1].max():.3f}]")
-    print(f"                Z=[{relay_normals[:,:,2].min():.3f}, {relay_normals[:,:,2].max():.3f}]")
+    # Compute relay wall normals (for hemisphere filtering)
+    if args.no_hemisphere_filter:
+        print("\n  Hemisphere filtering: DISABLED")
+        relay_normals = None
+    else:
+        print("\n  Computing relay wall normals (for hemisphere filtering)...")
+        camera_origin = scene_params['camera_origin']
+        relay_normals = compute_relay_normals(relay_pos, camera_origin)
+        print(f"  Normal range: X=[{relay_normals[:,:,0].min():.3f}, {relay_normals[:,:,0].max():.3f}]")
+        print(f"                Y=[{relay_normals[:,:,1].min():.3f}, {relay_normals[:,:,1].max():.3f}]")
+        print(f"                Z=[{relay_normals[:,:,2].min():.3f}, {relay_normals[:,:,2].max():.3f}]")
 
-    # Visualize normals (computed from finite differences)
-    print("\n  Generating relay normals visualization...")
-    visualize_relay_normals(relay_pos, relay_normals, camera_origin, args.output_dir, output_name)
+        # Visualize normals (computed from finite differences)
+        print("\n  Generating relay normals visualization...")
+        visualize_relay_normals(relay_pos, relay_normals, camera_origin, args.output_dir, output_name)
 
     # 5. Determine volume bounds
     print("\n[5/7] Setting up reconstruction volume...")
