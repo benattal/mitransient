@@ -40,12 +40,12 @@ Key Parameters:
 - --volume-from-camera: Auto-compute bounds from camera frustum (good starting point)
 - --no-falloff: Disable 1/r distance falloff (can help with some scenes)
 
-Output:
-- *_orthographic.png: Combined front/side/top views (grayscale intensity)
-- *_orthographic_color.png: Combined views with RGB color
-- *_orthographic_overlay.png: Reconstruction overlaid with relay wall point cloud
-- *_volume.npy: 3D reconstruction volume (Vx, Vy, Vz)
-- *_volume_rgb.npy: 3D RGB reconstruction volume (Vx, Vy, Vz, 3)
+Output (saved to {output-dir}/{output-name}/):
+- orthographic.png: Combined front/side/top views (grayscale intensity)
+- orthographic_color.png: Combined views with RGB color
+- orthographic_overlay.png: Reconstruction overlaid with relay wall point cloud
+- volume.npy: 3D reconstruction volume (Vx, Vy, Vz)
+- volume_rgb.npy: 3D RGB reconstruction volume (Vx, Vy, Vz, 3)
 """
 
 import os
@@ -350,7 +350,7 @@ def visualize_relay_normals(relay_pos, normals, camera_origin, output_dir, outpu
     axes[2].set_ylabel('Pixel Y')
     plt.colorbar(axes[2].images[0], ax=axes[2], fraction=0.046)
 
-    save_path = os.path.join(output_dir, f'{output_name}_relay_normals.png')
+    save_path = os.path.join(output_dir, f'relay_normals.png')
     plt.savefig(save_path, dpi=200)
     plt.close()
     print(f"  Saved relay normals visualization: {save_path}")
@@ -789,18 +789,19 @@ def visualize_orthographic(volume, volume_min, volume_max, output_dir, output_na
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Compute all projections first
-    # Front view (XY plane, max over Z - axis 2)
-    front = np.max(volume, axis=2)
-    # Side view (ZY plane, max over X - axis 0)
-    side = np.max(volume, axis=0)
-    # Top view (XZ plane, max over Y - axis 1)
-    top = np.max(volume, axis=1)
-
     # Apply visualization transform
     front, label = apply_vis_transform(front, vis_transform, vis_scale, vis_bias)
     side, _ = apply_vis_transform(side, vis_transform, vis_scale, vis_bias)
     top, _ = apply_vis_transform(top, vis_transform, vis_scale, vis_bias)
+
+    # Compute all projections first
+    # Front view (XY plane, max over Z - axis 2)
+    front = np.sum(volume, axis=2)
+    # Side view (ZY plane, max over X - axis 0)
+    side = np.sum(volume, axis=0)
+    # Top view (XZ plane, max over Y - axis 1)
+    top = np.sum(volume, axis=1)
+
 
     # Find global min/max across all projections for consistent normalization
     all_projs = [front, side, top]
@@ -853,7 +854,7 @@ def visualize_orthographic(volume, volume_min, volume_max, output_dir, output_na
         plt.colorbar(im, ax=axes[ax_idx], fraction=0.046, pad=0.04, label=label)
 
     plt.tight_layout()
-    combined_path = os.path.join(output_dir, f'{output_name}_orthographic.png')
+    combined_path = os.path.join(output_dir, f'orthographic.png')
     plt.savefig(combined_path, dpi=300)
     plt.close()
     print(f"  Saved: {combined_path}")
@@ -938,7 +939,7 @@ def visualize_orthographic_color(volume_rgb, volume_min, volume_max, output_dir,
         axes[ax_idx].set_title('Top View (XZ) - Color')
 
     plt.tight_layout()
-    combined_path = os.path.join(output_dir, f'{output_name}_orthographic_color.png')
+    combined_path = os.path.join(output_dir, f'orthographic_color.png')
     plt.savefig(combined_path, dpi=300)
     plt.close()
     print(f"  Saved: {combined_path}")
@@ -962,7 +963,7 @@ def visualize_orthographic_color(volume_rgb, volume_min, volume_max, output_dir,
         plt.ylabel(ylabel)
         plt.title(f'{name.capitalize()} View - Color (Max Intensity Projection)')
 
-        save_path = os.path.join(output_dir, f'{output_name}_{name}_color.png')
+        save_path = os.path.join(output_dir, f'{name}_color.png')
         plt.savefig(save_path, dpi=300)
         plt.close()
         print(f"  Saved: {save_path}")
@@ -1073,7 +1074,7 @@ def visualize_orthographic_with_pointcloud(volume_rgb, relay_pos, relay_colors,
         axes[ax_idx].set_title('Top View (XZ) - Reconstruction + Point Cloud')
 
     plt.tight_layout()
-    combined_path = os.path.join(output_dir, f'{output_name}_orthographic_overlay.png')
+    combined_path = os.path.join(output_dir, f'orthographic_overlay.png')
     plt.savefig(combined_path, dpi=300)
     plt.close()
     print(f"  Saved: {combined_path}")
@@ -1103,7 +1104,7 @@ def visualize_orthographic_with_pointcloud(volume_rgb, relay_pos, relay_colors,
         plt.ylabel(ylabel)
         plt.title(f'{name.capitalize()} View - Reconstruction + Point Cloud')
 
-        save_path = os.path.join(output_dir, f'{output_name}_{name}_overlay.png')
+        save_path = os.path.join(output_dir, f'{name}_overlay.png')
         plt.savefig(save_path, dpi=300)
         plt.close()
         print(f"  Saved: {save_path}")
@@ -1208,7 +1209,7 @@ def visualize_direct_vs_indirect(transient_original, indirect, direct_mask,
     if use_log_scale:
         axes[1, 2].set_yscale('log')
 
-    save_path = os.path.join(output_dir, f'{output_name}_direct_vs_indirect.png')
+    save_path = os.path.join(output_dir, f'direct_vs_indirect.png')
     plt.savefig(save_path, dpi=250)
     plt.close()
     print(f"  Saved direct vs indirect visualization: {save_path}")
@@ -1307,11 +1308,11 @@ def save_results(volume, relay_depths, output_dir, output_name):
     """Save reconstruction results to numpy files."""
     os.makedirs(output_dir, exist_ok=True)
 
-    volume_path = os.path.join(output_dir, f'{output_name}_volume.npy')
+    volume_path = os.path.join(output_dir, f'volume.npy')
     np.save(volume_path, volume)
     print(f"  Saved volume: {volume_path}")
 
-    depths_path = os.path.join(output_dir, f'{output_name}_relay_depths.npy')
+    depths_path = os.path.join(output_dir, f'relay_depths.npy')
     np.save(depths_path, relay_depths)
     print(f"  Saved relay depths: {depths_path}")
 
@@ -1415,7 +1416,7 @@ def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
     for i, v in enumerate([direct_energy, indirect_energy, total_energy]):
         axes[1, 2].text(i, v * 1.1, f'{v:.2e}', ha='center', fontsize=9)
 
-    save_path = os.path.join(output_dir, f'{output_name}_depths_debug.png')
+    save_path = os.path.join(output_dir, f'depths_debug.png')
     plt.savefig(save_path, dpi=250)
     plt.close()
     print(f"  Saved depth visualization: {save_path}")
@@ -1513,7 +1514,7 @@ def visualize_phasors(phasor_cos, phasor_sin, start_opl, bin_width, wavelength,
     # Add wavelength info
     fig.suptitle(f'Phasor Field Analysis (wavelength = {wavelength} m)', fontsize=12)
 
-    save_path = os.path.join(output_dir, f'{output_name}_phasors_debug.png')
+    save_path = os.path.join(output_dir, f'phasors_debug.png')
     plt.savefig(save_path, dpi=250)
     plt.close()
     print(f"  Saved phasor visualization: {save_path}")
@@ -1897,7 +1898,7 @@ def main():
     save_results(volume, relay_depths, output_dir, output_name)
 
     # Also save RGB volume
-    volume_rgb_path = os.path.join(output_dir, f'{output_name}_volume_rgb.npy')
+    volume_rgb_path = os.path.join(output_dir, f'volume_rgb.npy')
     np.save(volume_rgb_path, volume_rgb)
     print(f"  Saved RGB volume: {volume_rgb_path}")
 

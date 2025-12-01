@@ -46,13 +46,15 @@ python render_transient.py scenes/ourbox_confocal.xml \
 
 ### Render Outputs
 
+Files are saved to `{output-dir}/{output-name}/`:
+
 | File | Description |
 |------|-------------|
-| `*_steady.exr` | Steady-state image (HDR) |
-| `*_steady.png` | Steady-state image (tonemapped) |
-| `*_transient.mp4` | Transient video (time evolution) |
-| `*_transient.npy` | Raw transient data `(H, W, T, C)` for reconstruction |
-| `*_transient_pixel_X_Y.png` | Transient plot at specified pixel |
+| `steady.exr` | Steady-state image (HDR) |
+| `steady.png` | Steady-state image (tonemapped) |
+| `transient.mp4` | Transient video (time evolution) |
+| `transient.npy` | Raw transient data `(H, W, T, C)` for reconstruction |
+| `transient_pixel_X_Y.png` | Transient plot at specified pixel |
 
 ---
 
@@ -113,8 +115,8 @@ python render_transient.py scenes/ourbox_confocal_nlos.xml \
     --spp 100000
 
 # Step 3: Backproject using both files
-python direct_backprojection.py results/ourbox_full_transient.npy \
-    --indirect-file results/ourbox_nlos_transient.npy \
+python direct_backprojection.py results/ourbox_full/transient.npy \
+    --indirect-file results/ourbox_nlos/transient.npy \
     --scene-file scenes/ourbox_confocal.xml \
     --voxel-resolution 128
 ```
@@ -205,12 +207,12 @@ Both scripts reconstruct a 3D volume from transient (time-resolved) captures:
 
 ```bash
 # Direct backprojection
-python direct_backprojection.py results/scene_transient.npy \
+python direct_backprojection.py results/scene/transient.npy \
     --scene-file scenes/my_scene.xml \
     --voxel-resolution 64
 
 # Phasor backprojection
-python phasor_backprojection.py results/scene_transient.npy \
+python phasor_backprojection.py results/scene/transient.npy \
     --scene-file scenes/my_scene.xml \
     --voxel-resolution 64 \
     --wavelength 0.05
@@ -221,8 +223,8 @@ python phasor_backprojection.py results/scene_transient.npy \
 When you have separate renders for direct (relay wall only) and indirect (hidden scene only) light:
 
 ```bash
-python direct_backprojection.py results/scene_direct.npy \
-    --indirect-file results/scene_indirect.npy \
+python direct_backprojection.py results/scene_direct/transient.npy \
+    --indirect-file results/scene_indirect/transient.npy \
     --scene-file scenes/my_scene.xml \
     --voxel-resolution 128
 ```
@@ -291,7 +293,7 @@ Coordinates are in meters: `(x_min, y_min, z_min)` and `(x_max, y_max, z_max)`.
 ### Basic Reconstruction
 
 ```bash
-python direct_backprojection.py results/ourbox_confocal_transient.npy \
+python direct_backprojection.py results/ourbox_confocal/transient.npy \
     --scene-file scenes/ourbox_confocal.xml \
     --voxel-resolution 64
 ```
@@ -299,7 +301,7 @@ python direct_backprojection.py results/ourbox_confocal_transient.npy \
 ### High-Quality with Single File
 
 ```bash
-python direct_backprojection.py results/ourbox_confocal_transient.npy \
+python direct_backprojection.py results/ourbox_confocal/transient.npy \
     --scene-file scenes/ourbox_confocal_hidden.xml \
     --voxel-resolution 128 \
     --volume-from-camera \
@@ -312,8 +314,8 @@ python direct_backprojection.py results/ourbox_confocal_transient.npy \
 ### High-Quality with Separate Direct/Indirect Files
 
 ```bash
-python direct_backprojection.py results/ourbox_confocal_transient_direct.npy \
-    --indirect-file results/ourbox_confocal_transient_indirect.npy \
+python direct_backprojection.py results/ourbox_confocal_direct/transient.npy \
+    --indirect-file results/ourbox_confocal_indirect/transient.npy \
     --scene-file scenes/ourbox_confocal_hidden.xml \
     --voxel-resolution 128 \
     --volume-from-camera \
@@ -326,7 +328,7 @@ python direct_backprojection.py results/ourbox_confocal_transient_direct.npy \
 ### Phasor with Wavelength Tuning
 
 ```bash
-python phasor_backprojection.py results/scene_transient.npy \
+python phasor_backprojection.py results/scene/transient.npy \
     --scene-file scenes/my_scene.xml \
     --voxel-resolution 128 \
     --wavelength 0.03 \
@@ -337,44 +339,63 @@ python phasor_backprojection.py results/scene_transient.npy \
 
 ```bash
 # Log scale for high dynamic range
-python direct_backprojection.py results/transient.npy \
+python direct_backprojection.py results/scene/transient.npy \
     --scene-file scenes/scene.xml \
     --vis-transform log
 
 # Square root (gamma-like compression)
-python direct_backprojection.py results/transient.npy \
+python direct_backprojection.py results/scene/transient.npy \
     --scene-file scenes/scene.xml \
     --vis-transform sqrt
 
 # Sigmoid with custom scale/bias
-python direct_backprojection.py results/transient.npy \
+python direct_backprojection.py results/scene/transient.npy \
     --scene-file scenes/scene.xml \
     --vis-transform sigmoid \
     --vis-scale 10 \
     --vis-bias -5
 ```
 
+### Wall Box HI NLOS (Retroreflective Letters)
+
+```bash
+python direct_backprojection.py renders/wall_box_hi_nlos/transient.npy \
+    --scene-file scenes/wall_box_hi_nlos.xml \
+    --voxel-resolution 128 \
+    --volume-min -1 -1 -0.9 \
+    --volume-max 1 0 0 \
+    --bin-threshold 0.0 \
+    --min-relay-distance 0.0 \
+    --vis-transform none \
+    --no-hemisphere-filter \
+    --transient-log \
+    --debug-pixel 50 64 \
+    --no-falloff
+```
+
 ## Output Files
+
+Files are saved to `{output-dir}/{output-name}/`:
 
 Both scripts generate:
 
 | File | Description |
 |------|-------------|
-| `*_orthographic.png` | Combined front/side/top max-intensity projections (grayscale) |
-| `*_orthographic_color.png` | Combined RGB projections |
-| `*_orthographic_overlay.png` | Reconstruction overlaid with relay wall point cloud |
-| `*_volume.npy` | 3D reconstruction volume `(Vx, Vy, Vz)` |
-| `*_volume_rgb.npy` | 3D RGB volume `(Vx, Vy, Vz, 3)` |
-| `*_relay_depths.npy` | Detected relay wall depths `(H, W)` |
-| `*_depths_debug.png` | Depth detection visualization |
-| `*_direct_vs_indirect.png` | Transient decomposition visualization |
+| `orthographic.png` | Combined front/side/top max-intensity projections (grayscale) |
+| `orthographic_color.png` | Combined RGB projections |
+| `orthographic_overlay.png` | Reconstruction overlaid with relay wall point cloud |
+| `volume.npy` | 3D reconstruction volume `(Vx, Vy, Vz)` |
+| `volume_rgb.npy` | 3D RGB volume `(Vx, Vy, Vz, 3)` |
+| `relay_depths.npy` | Detected relay wall depths `(H, W)` |
+| `depths_debug.png` | Depth detection visualization |
+| `direct_vs_indirect.png` | Transient decomposition visualization |
 
 Phasor additionally generates:
 
 | File | Description |
 |------|-------------|
-| `*_phasors_debug.png` | Phasor field visualization |
-| `*_relay_normals.png` | Computed relay wall normals |
+| `phasors_debug.png` | Phasor field visualization |
+| `relay_normals.png` | Computed relay wall normals |
 
 ## Tips
 
@@ -458,8 +479,8 @@ python render_transient.py scenes/scene_nlos.xml \
     --output-dir results --output-name scene_nlos --spp 100000 --no-plot
 
 # 4. Backproject with both files
-python direct_backprojection.py results/scene_full_transient.npy \
-    --indirect-file results/scene_nlos_transient.npy \
+python direct_backprojection.py results/scene_full/transient.npy \
+    --indirect-file results/scene_nlos/transient.npy \
     --scene-file scenes/scene.xml \
     --voxel-resolution 128 \
     --volume-min -1 -0.1 -1 --volume-max 1 1 1 \
@@ -467,7 +488,7 @@ python direct_backprojection.py results/scene_full_transient.npy \
     --min-relay-distance 0.1
 
 # Or with single combined file (simpler but less accurate):
-python direct_backprojection.py results/scene_full_transient.npy \
+python direct_backprojection.py results/scene_full/transient.npy \
     --scene-file scenes/scene.xml \
     --voxel-resolution 128 \
     --volume-min -1 -0.1 -1 --volume-max 1 1 1
@@ -480,7 +501,7 @@ python direct_backprojection.py results/scene_full_transient.npy \
 python render_transient.py scenes/ourbox_confocal.xml --spp 50000
 
 # Reconstruct
-python direct_backprojection.py results/ourbox_confocal_transient.npy \
+python direct_backprojection.py results/ourbox_confocal/transient.npy \
     --scene-file scenes/ourbox_confocal.xml \
     --voxel-resolution 64
 ```

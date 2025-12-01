@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <scene version="3.0.0">
-    <!-- Camera at origin, looking down -Z toward the wall -->
+    <!-- Camera at origin, looking down -Z toward the relay wall -->
     <sensor type="perspective">
         <string name="fov_axis" value="smaller"/>
         <float name="fov" value="45"/>
@@ -43,7 +43,7 @@
         </emitter>
     </integrator>
 
-    <!-- Relay wall at z=-2.0, facing +Z (toward camera) -->
+    <!-- Relay wall at z=-1.5, facing +Z (toward camera) -->
     <shape type="rectangle">
         <transform name="to_world">
             <scale x="2.0" y="2.0" z="1.0"/>
@@ -54,114 +54,170 @@
         </bsdf>
     </shape>
 
-    <!-- Floor -->
+    <!-- Red occluding wall blocking bottom half of FOV (in front of relay wall) -->
     <shape type="cube">
         <transform name="to_world">
-            <scale x="2.0" y="2.0" z="0.25"/>
-            <translate x="0.0" y="-2.0" z="-0.5"/>
+            <scale x="2.0" y="1.0" z="0.25"/>
+            <translate x="0.0" y="-1.0" z="-0.5"/>
         </transform>
-        <bsdf type="diffuse">
-            <rgb name="reflectance" value="0.15, 0.0, 0.0"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.01, 0.0, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
         </bsdf>
     </shape>
 
-    <!-- Letter "H" made of boxes (left side) - retro-reflective -->
-    <!-- Left vertical bar of H: y = 0.4, 0.6, 0.8, 1.0 -->
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.7" y="0.4" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <!-- ==================== -->
+    <!-- Letter "H" using spheres (green retroreflective) -->
+    <!-- Centered at x=-0.35, z=-0.75 -->
+    <!-- ==================== -->
+
+    <!-- H: Left vertical bar (5 spheres) -->
+    <shape type="sphere">
+        <point name="center" x="-0.5" y="-0.2" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.7" y="0.6" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="-0.5" y="-0.36" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.7" y="0.8" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="-0.5" y="-0.52" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.7" y="1.0" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="-0.5" y="-0.68" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
+    </shape>
+    <shape type="sphere">
+        <point name="center" x="-0.5" y="-0.84" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
 
-    <!-- Right vertical bar of H -->
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.3" y="0.4" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <!-- H: Right vertical bar (5 spheres) -->
+    <shape type="sphere">
+        <point name="center" x="-0.2" y="-0.2" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.3" y="0.6" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="-0.2" y="-0.36" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.3" y="0.8" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="-0.2" y="-0.52" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.3" y="1.0" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="-0.2" y="-0.68" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
+    </shape>
+    <shape type="sphere">
+        <point name="center" x="-0.2" y="-0.84" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
 
-    <!-- Horizontal bar of H (middle) -->
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="-0.5" y="0.7" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <!-- H: Middle horizontal bar (1 sphere in the middle) -->
+    <shape type="sphere">
+        <point name="center" x="-0.31" y="-0.52" z="-0.75"/>
+        <float name="radius" value="0.06"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
 
-    <!-- Letter "I" made of boxes (right side) - retro-reflective -->
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="0.5" y="0.4" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="-0.39" y="-0.52" z="-0.75"/>
+        <float name="radius" value="0.06"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="0.5" y="0.6" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+
+    <!-- ==================== -->
+    <!-- Letter "I" using spheres (green retroreflective) -->
+    <!-- Centered at x=0.35, z=-0.75 -->
+    <!-- ==================== -->
+
+    <!-- I: Vertical bar (5 spheres) -->
+    <shape type="sphere">
+        <point name="center" x="0.35" y="-0.2" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="0.5" y="0.8" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="0.35" y="-0.36" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
-    <shape type="cube">
-        <transform name="to_world">
-            <scale x="0.08" y="0.08" z="0.08"/>
-            <translate x="0.5" y="1.0" z="-0.75"/>
-        </transform>
-        <bsdf type="retroreflector"/>
+    <shape type="sphere">
+        <point name="center" x="0.35" y="-0.52" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
+    </shape>
+    <shape type="sphere">
+        <point name="center" x="0.35" y="-0.68" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
+    </shape>
+    <shape type="sphere">
+        <point name="center" x="0.35" y="-0.84" z="-0.75"/>
+        <float name="radius" value="0.08"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.0, 0.05, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
+        </bsdf>
     </shape>
 </scene>

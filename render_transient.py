@@ -74,11 +74,11 @@ output_dir = os.path.join(base_output_dir, output_name)
 os.makedirs(output_dir, exist_ok=True)
 
 # Save steady-state image
-output_steady_exr_path = os.path.join(output_dir, f'{output_name}_steady.exr')
+output_steady_exr_path = os.path.join(output_dir, 'steady.exr')
 mi.util.write_bitmap(output_steady_exr_path, data_steady)
 print(f"Steady-state image saved to: {output_steady_exr_path}")
 
-output_steady_png_path = os.path.join(output_dir, f'{output_name}_steady.png')
+output_steady_png_path = os.path.join(output_dir, 'steady.png')
 mi.util.write_bitmap(output_steady_png_path, data_steady)
 print(f"Steady-state image saved to: {output_steady_png_path}")
 
@@ -86,7 +86,7 @@ print(f"Steady-state image saved to: {output_steady_png_path}")
 data_transient_clipped = dr.clip(data_transient, 0.0, args.clip_max)
 data_transient_tonemapped = mitr.vis.tonemap_transient(data_transient_clipped)
 
-output_video_path = os.path.join(output_dir, f'{output_name}_transient.mp4')
+output_video_path = os.path.join(output_dir, 'transient.mp4')
 mitr.vis.save_video(
     output_video_path,
     data_transient_tonemapped,
@@ -95,7 +95,7 @@ mitr.vis.save_video(
 print(f"Transient video saved to: {output_video_path}")
 
 # Save raw transient data as .npy file
-output_npy_path = os.path.join(output_dir, f'{output_name}_transient.npy')
+output_npy_path = os.path.join(output_dir, 'transient.npy')
 np.save(output_npy_path, np.array(data_transient))
 print(f"Transient data saved to: {output_npy_path}")
 
@@ -150,7 +150,7 @@ if not args.no_plot:
     ax.grid(True, alpha=0.3)
 
     # Save plot
-    output_plot_path = os.path.join(output_dir, f'{output_name}_transient_pixel_{pixel_x}_{pixel_y}.png')
+    output_plot_path = os.path.join(output_dir, f'transient_pixel_{pixel_x}_{pixel_y}.png')
     plt.savefig(output_plot_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Transient plot saved to: {output_plot_path}")
