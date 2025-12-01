@@ -633,9 +633,7 @@ def visualize_orthographic(volume, volume_min, volume_max, output_dir, output_na
     os.makedirs(output_dir, exist_ok=True)
 
     # Apply visualization transform
-    front, label = apply_vis_transform(front, vis_transform, vis_scale, vis_bias)
-    side, _ = apply_vis_transform(side, vis_transform, vis_scale, vis_bias)
-    top, _ = apply_vis_transform(top, vis_transform, vis_scale, vis_bias)
+    volume, label = apply_vis_transform(volume, vis_transform, vis_scale, vis_bias)
 
     # Compute all projections first
     front = np.sum(volume, axis=2)

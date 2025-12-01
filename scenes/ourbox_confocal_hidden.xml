@@ -11,7 +11,7 @@
       <boolean name="use_nlos_only" value="false"/>
       <integer name="max_depth" value="8"/>
       <string name="temporal_filter" value="box"/>
-      <float name="gaussian_stddev" value="2.0"/>
+	  <float name="gaussian_stddev" value="0.5"/>
 
       <!-- Confocal Projector: single spot with sigma=0.001 -->
       <emitter type="confocal_projector" name="confocal_projector">
