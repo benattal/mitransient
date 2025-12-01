@@ -61,15 +61,17 @@ data_steady, data_transient = mi.render(scene, spp=args.spp)
 print(f"Rendering complete!")
 print(f"Steady shape: {data_steady.shape}")
 
-# Determine output directory and filename
-output_dir = args.output_dir if args.output_dir else os.path.join(os.path.dirname(__file__), 'results')
-os.makedirs(output_dir, exist_ok=True)
-
+# Determine output name first
 if args.output_name:
     output_name = args.output_name
 else:
     # Derive from scene filename (without extension)
     output_name = os.path.splitext(os.path.basename(scene_path))[0]
+
+# Create output directory: results/{output_name}/ by default
+base_output_dir = args.output_dir if args.output_dir else os.path.join(os.path.dirname(__file__), 'renders')
+output_dir = os.path.join(base_output_dir, output_name)
+os.makedirs(output_dir, exist_ok=True)
 
 # Save steady-state image
 output_steady_exr_path = os.path.join(output_dir, f'{output_name}_steady.exr')

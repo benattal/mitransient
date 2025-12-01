@@ -119,6 +119,9 @@ def parse_args():
                         help='Bias (offset) applied before non-linearity: output = transform(scale * input + bias). Default: 0.0')
     parser.add_argument('--transient-log', action='store_true',
                         help='Use log scale for transient visualization plots. Default: disabled')
+    parser.add_argument('--ortho-views', type=str, nargs='+', default=['front', 'top'],
+                        choices=['front', 'side', 'top'],
+                        help='Which orthographic views to show (front, side, top). Default: front top')
     return parser.parse_args()
 
 
@@ -347,9 +350,8 @@ def visualize_relay_normals(relay_pos, normals, camera_origin, output_dir, outpu
     axes[2].set_ylabel('Pixel Y')
     plt.colorbar(axes[2].images[0], ax=axes[2], fraction=0.046)
 
-    plt.tight_layout()
     save_path = os.path.join(output_dir, f'{output_name}_relay_normals.png')
-    plt.savefig(save_path, dpi=200, bbox_inches='tight')
+    plt.savefig(save_path, dpi=200)
     plt.close()
     print(f"  Saved relay normals visualization: {save_path}")
 
@@ -767,7 +769,8 @@ def apply_vis_transform(data, transform='none', scale=1.0, bias=0.0):
 
 
 def visualize_orthographic(volume, volume_min, volume_max, output_dir, output_name,
-                           vis_transform='none', vis_scale=1.0, vis_bias=0.0):
+                           vis_transform='none', vis_scale=1.0, vis_bias=0.0,
+                           views=None):
     """
     Create front, side, top orthographic projections using max intensity projection.
 
@@ -779,7 +782,11 @@ def visualize_orthographic(volume, volume_min, volume_max, output_dir, output_na
         vis_transform: Non-linear transform for visualization
         vis_scale: Scale factor before transform
         vis_bias: Bias before transform
+        views: List of views to show ('front', 'side', 'top'). Default: ['front', 'top']
     """
+    if views is None:
+        views = ['front', 'top']
+
     os.makedirs(output_dir, exist_ok=True)
 
     # Compute all projections first
@@ -803,47 +810,57 @@ def visualize_orthographic(volume, volume_min, volume_max, output_dir, output_na
     # Build title suffix based on transform
     title_suffix = f' ({vis_transform})' if vis_transform != 'none' else ''
 
-    # Combined 3-panel figure
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    # Build list of views to display
+    n_views = len(views)
+    fig, axes = plt.subplots(1, n_views, figsize=(5 * n_views, 5))
+    if n_views == 1:
+        axes = [axes]
 
-    im0 = axes[0].imshow(
-        front.T, origin='lower', cmap='hot',
-        extent=[volume_min[0], volume_max[0], volume_min[1], volume_max[1]],
-        aspect='equal', vmin=global_min, vmax=global_max
-    )
-    axes[0].set_xlabel('X (m)')
-    axes[0].set_ylabel('Y (m)')
-    axes[0].set_title(f'Front View (XY){title_suffix}')
-    plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04, label=label)
+    ax_idx = 0
+    if 'front' in views:
+        im = axes[ax_idx].imshow(
+            front.T, origin='lower', cmap='hot',
+            extent=[volume_min[0], volume_max[0], volume_min[1], volume_max[1]],
+            aspect='equal', vmin=global_min, vmax=global_max
+        )
+        axes[ax_idx].set_xlabel('X (m)')
+        axes[ax_idx].set_ylabel('Y (m)')
+        axes[ax_idx].set_title(f'Front View (XY){title_suffix}')
+        plt.colorbar(im, ax=axes[ax_idx], fraction=0.046, pad=0.04, label=label)
+        ax_idx += 1
 
-    im1 = axes[1].imshow(
-        side, origin='lower', cmap='hot',
-        extent=[volume_min[2], volume_max[2], volume_min[1], volume_max[1]],
-        aspect='equal', vmin=global_min, vmax=global_max
-    )
-    axes[1].set_xlabel('Z (m)')
-    axes[1].set_ylabel('Y (m)')
-    axes[1].set_title(f'Side View (ZY){title_suffix}')
-    plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04, label=label)
+    if 'side' in views:
+        im = axes[ax_idx].imshow(
+            side, origin='lower', cmap='hot',
+            extent=[volume_min[2], volume_max[2], volume_min[1], volume_max[1]],
+            aspect='equal', vmin=global_min, vmax=global_max
+        )
+        axes[ax_idx].set_xlabel('Z (m)')
+        axes[ax_idx].set_ylabel('Y (m)')
+        axes[ax_idx].set_title(f'Side View (ZY){title_suffix}')
+        plt.colorbar(im, ax=axes[ax_idx], fraction=0.046, pad=0.04, label=label)
+        ax_idx += 1
 
-    im2 = axes[2].imshow(
-        top.T, origin='lower', cmap='hot',
-        extent=[volume_min[0], volume_max[0], volume_min[2], volume_max[2]],
-        aspect='equal', vmin=global_min, vmax=global_max
-    )
-    axes[2].set_xlabel('X (m)')
-    axes[2].set_ylabel('Z (m)')
-    axes[2].set_title(f'Top View (XZ){title_suffix}')
-    plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04, label=label)
+    if 'top' in views:
+        im = axes[ax_idx].imshow(
+            top.T, origin='lower', cmap='hot',
+            extent=[volume_min[0], volume_max[0], volume_min[2], volume_max[2]],
+            aspect='equal', vmin=global_min, vmax=global_max
+        )
+        axes[ax_idx].set_xlabel('X (m)')
+        axes[ax_idx].set_ylabel('Z (m)')
+        axes[ax_idx].set_title(f'Top View (XZ){title_suffix}')
+        plt.colorbar(im, ax=axes[ax_idx], fraction=0.046, pad=0.04, label=label)
 
     plt.tight_layout()
     combined_path = os.path.join(output_dir, f'{output_name}_orthographic.png')
-    plt.savefig(combined_path, dpi=300, bbox_inches='tight')
+    plt.savefig(combined_path, dpi=300)
     plt.close()
     print(f"  Saved: {combined_path}")
 
 
-def visualize_orthographic_color(volume_rgb, volume_min, volume_max, output_dir, output_name):
+def visualize_orthographic_color(volume_rgb, volume_min, volume_max, output_dir, output_name,
+                                  views=None):
     """
     Create color orthographic projections (R, G, B channels) with global normalization.
 
@@ -852,7 +869,11 @@ def visualize_orthographic_color(volume_rgb, volume_min, volume_max, output_dir,
         volume_min/max: Physical bounds
         output_dir: Output directory
         output_name: Output filename prefix
+        views: List of views to show ('front', 'side', 'top'). Default: ['front', 'top']
     """
+    if views is None:
+        views = ['front', 'top']
+
     os.makedirs(output_dir, exist_ok=True)
 
     # Compute all projections for each channel
@@ -877,54 +898,62 @@ def visualize_orthographic_color(volume_rgb, volume_min, volume_max, output_dir,
     side_rgb = np.clip(side_rgb, 0, 1)
     top_rgb = np.clip(top_rgb, 0, 1)
 
-    # Combined 3-panel figure
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    # Combined n-panel figure
+    n_views = len(views)
+    fig, axes = plt.subplots(1, n_views, figsize=(5 * n_views, 5))
+    if n_views == 1:
+        axes = [axes]
 
-    # Front view - need to transpose for correct orientation
-    axes[0].imshow(
-        np.transpose(front_rgb, (1, 0, 2)), origin='lower',
-        extent=[volume_min[0], volume_max[0], volume_min[1], volume_max[1]],
-        aspect='equal'
-    )
-    axes[0].set_xlabel('X (m)')
-    axes[0].set_ylabel('Y (m)')
-    axes[0].set_title('Front View (XY) - Color')
+    ax_idx = 0
+    if 'front' in views:
+        axes[ax_idx].imshow(
+            np.transpose(front_rgb, (1, 0, 2)), origin='lower',
+            extent=[volume_min[0], volume_max[0], volume_min[1], volume_max[1]],
+            aspect='equal'
+        )
+        axes[ax_idx].set_xlabel('X (m)')
+        axes[ax_idx].set_ylabel('Y (m)')
+        axes[ax_idx].set_title('Front View (XY) - Color')
+        ax_idx += 1
 
-    # Side view
-    axes[1].imshow(
-        side_rgb, origin='lower',
-        extent=[volume_min[2], volume_max[2], volume_min[1], volume_max[1]],
-        aspect='equal'
-    )
-    axes[1].set_xlabel('Z (m)')
-    axes[1].set_ylabel('Y (m)')
-    axes[1].set_title('Side View (ZY) - Color')
+    if 'side' in views:
+        axes[ax_idx].imshow(
+            side_rgb, origin='lower',
+            extent=[volume_min[2], volume_max[2], volume_min[1], volume_max[1]],
+            aspect='equal'
+        )
+        axes[ax_idx].set_xlabel('Z (m)')
+        axes[ax_idx].set_ylabel('Y (m)')
+        axes[ax_idx].set_title('Side View (ZY) - Color')
+        ax_idx += 1
 
-    # Top view - need to transpose for correct orientation
-    axes[2].imshow(
-        np.transpose(top_rgb, (1, 0, 2)), origin='lower',
-        extent=[volume_min[0], volume_max[0], volume_min[2], volume_max[2]],
-        aspect='equal'
-    )
-    axes[2].set_xlabel('X (m)')
-    axes[2].set_ylabel('Z (m)')
-    axes[2].set_title('Top View (XZ) - Color')
+    if 'top' in views:
+        axes[ax_idx].imshow(
+            np.transpose(top_rgb, (1, 0, 2)), origin='lower',
+            extent=[volume_min[0], volume_max[0], volume_min[2], volume_max[2]],
+            aspect='equal'
+        )
+        axes[ax_idx].set_xlabel('X (m)')
+        axes[ax_idx].set_ylabel('Z (m)')
+        axes[ax_idx].set_title('Top View (XZ) - Color')
 
     plt.tight_layout()
     combined_path = os.path.join(output_dir, f'{output_name}_orthographic_color.png')
-    plt.savefig(combined_path, dpi=300, bbox_inches='tight')
+    plt.savefig(combined_path, dpi=300)
     plt.close()
     print(f"  Saved: {combined_path}")
 
-    # Individual high-res color projections
-    projections = [
-        ('front', np.transpose(front_rgb, (1, 0, 2)),
-         [volume_min[0], volume_max[0], volume_min[1], volume_max[1]], 'X (m)', 'Y (m)'),
-        ('side', side_rgb,
-         [volume_min[2], volume_max[2], volume_min[1], volume_max[1]], 'Z (m)', 'Y (m)'),
-        ('top', np.transpose(top_rgb, (1, 0, 2)),
-         [volume_min[0], volume_max[0], volume_min[2], volume_max[2]], 'X (m)', 'Z (m)')
-    ]
+    # Individual high-res color projections (only for selected views)
+    projections = []
+    if 'front' in views:
+        projections.append(('front', np.transpose(front_rgb, (1, 0, 2)),
+         [volume_min[0], volume_max[0], volume_min[1], volume_max[1]], 'X (m)', 'Y (m)'))
+    if 'side' in views:
+        projections.append(('side', side_rgb,
+         [volume_min[2], volume_max[2], volume_min[1], volume_max[1]], 'Z (m)', 'Y (m)'))
+    if 'top' in views:
+        projections.append(('top', np.transpose(top_rgb, (1, 0, 2)),
+         [volume_min[0], volume_max[0], volume_min[2], volume_max[2]], 'X (m)', 'Z (m)'))
 
     for name, proj, extent, xlabel, ylabel in projections:
         plt.figure(figsize=(10, 10))
@@ -934,14 +963,14 @@ def visualize_orthographic_color(volume_rgb, volume_min, volume_max, output_dir,
         plt.title(f'{name.capitalize()} View - Color (Max Intensity Projection)')
 
         save_path = os.path.join(output_dir, f'{output_name}_{name}_color.png')
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300)
         plt.close()
         print(f"  Saved: {save_path}")
 
 
 def visualize_orthographic_with_pointcloud(volume_rgb, relay_pos, relay_colors,
                                             volume_min, volume_max, output_dir, output_name,
-                                            point_alpha=0.7, point_size=2):
+                                            point_alpha=0.7, point_size=2, views=None):
     """
     Create color orthographic projections overlaid with the unprojected color point cloud.
 
@@ -954,7 +983,11 @@ def visualize_orthographic_with_pointcloud(volume_rgb, relay_pos, relay_colors,
         output_name: Output filename prefix
         point_alpha: Alpha for point cloud overlay
         point_size: Size of points in scatter plot
+        views: List of views to show ('front', 'side', 'top'). Default: ['front', 'top']
     """
+    if views is None:
+        views = ['front', 'top']
+
     os.makedirs(output_dir, exist_ok=True)
 
     H, W = relay_pos.shape[:2]
@@ -991,66 +1024,74 @@ def visualize_orthographic_with_pointcloud(volume_rgb, relay_pos, relay_colors,
     # Extract point cloud coordinates for each view
     px, py, pz = points_3d[:, 0], points_3d[:, 1], points_3d[:, 2]
 
-    # Combined 3-panel figure with overlay
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    # Combined n-panel figure with overlay
+    n_views = len(views)
+    fig, axes = plt.subplots(1, n_views, figsize=(5 * n_views, 5))
+    if n_views == 1:
+        axes = [axes]
 
-    # Front view (XY plane) - volume + point cloud
-    axes[0].imshow(
-        np.transpose(front_rgb, (1, 0, 2)), origin='lower',
-        extent=[volume_min[0], volume_max[0], volume_min[1], volume_max[1]],
-        aspect='equal'
-    )
-    axes[0].scatter(px, py, c=colors_normalized, s=point_size, alpha=point_alpha, marker='.')
-    axes[0].set_xlim([volume_min[0], volume_max[0]])
-    axes[0].set_ylim([volume_min[1], volume_max[1]])
-    axes[0].set_xlabel('X (m)')
-    axes[0].set_ylabel('Y (m)')
-    axes[0].set_title('Front View (XY) - Reconstruction + Point Cloud')
+    ax_idx = 0
+    if 'front' in views:
+        axes[ax_idx].imshow(
+            np.transpose(front_rgb, (1, 0, 2)), origin='lower',
+            extent=[volume_min[0], volume_max[0], volume_min[1], volume_max[1]],
+            aspect='equal'
+        )
+        axes[ax_idx].scatter(px, py, c=colors_normalized, s=point_size, alpha=point_alpha, marker='.')
+        axes[ax_idx].set_xlim([volume_min[0], volume_max[0]])
+        axes[ax_idx].set_ylim([volume_min[1], volume_max[1]])
+        axes[ax_idx].set_xlabel('X (m)')
+        axes[ax_idx].set_ylabel('Y (m)')
+        axes[ax_idx].set_title('Front View (XY) - Reconstruction + Point Cloud')
+        ax_idx += 1
 
-    # Side view (ZY plane) - volume + point cloud
-    axes[1].imshow(
-        side_rgb, origin='lower',
-        extent=[volume_min[2], volume_max[2], volume_min[1], volume_max[1]],
-        aspect='equal'
-    )
-    axes[1].scatter(pz, py, c=colors_normalized, s=point_size, alpha=point_alpha, marker='.')
-    axes[1].set_xlim([volume_min[2], volume_max[2]])
-    axes[1].set_ylim([volume_min[1], volume_max[1]])
-    axes[1].set_xlabel('Z (m)')
-    axes[1].set_ylabel('Y (m)')
-    axes[1].set_title('Side View (ZY) - Reconstruction + Point Cloud')
+    if 'side' in views:
+        axes[ax_idx].imshow(
+            side_rgb, origin='lower',
+            extent=[volume_min[2], volume_max[2], volume_min[1], volume_max[1]],
+            aspect='equal'
+        )
+        axes[ax_idx].scatter(pz, py, c=colors_normalized, s=point_size, alpha=point_alpha, marker='.')
+        axes[ax_idx].set_xlim([volume_min[2], volume_max[2]])
+        axes[ax_idx].set_ylim([volume_min[1], volume_max[1]])
+        axes[ax_idx].set_xlabel('Z (m)')
+        axes[ax_idx].set_ylabel('Y (m)')
+        axes[ax_idx].set_title('Side View (ZY) - Reconstruction + Point Cloud')
+        ax_idx += 1
 
-    # Top view (XZ plane) - volume + point cloud
-    axes[2].imshow(
-        np.transpose(top_rgb, (1, 0, 2)), origin='lower',
-        extent=[volume_min[0], volume_max[0], volume_min[2], volume_max[2]],
-        aspect='equal'
-    )
-    axes[2].scatter(px, pz, c=colors_normalized, s=point_size, alpha=point_alpha, marker='.')
-    axes[2].set_xlim([volume_min[0], volume_max[0]])
-    axes[2].set_ylim([volume_min[2], volume_max[2]])
-    axes[2].set_xlabel('X (m)')
-    axes[2].set_ylabel('Z (m)')
-    axes[2].set_title('Top View (XZ) - Reconstruction + Point Cloud')
+    if 'top' in views:
+        axes[ax_idx].imshow(
+            np.transpose(top_rgb, (1, 0, 2)), origin='lower',
+            extent=[volume_min[0], volume_max[0], volume_min[2], volume_max[2]],
+            aspect='equal'
+        )
+        axes[ax_idx].scatter(px, pz, c=colors_normalized, s=point_size, alpha=point_alpha, marker='.')
+        axes[ax_idx].set_xlim([volume_min[0], volume_max[0]])
+        axes[ax_idx].set_ylim([volume_min[2], volume_max[2]])
+        axes[ax_idx].set_xlabel('X (m)')
+        axes[ax_idx].set_ylabel('Z (m)')
+        axes[ax_idx].set_title('Top View (XZ) - Reconstruction + Point Cloud')
 
     plt.tight_layout()
     combined_path = os.path.join(output_dir, f'{output_name}_orthographic_overlay.png')
-    plt.savefig(combined_path, dpi=300, bbox_inches='tight')
+    plt.savefig(combined_path, dpi=300)
     plt.close()
     print(f"  Saved: {combined_path}")
 
-    # Individual high-res overlaid projections
-    projections = [
-        ('front', np.transpose(front_rgb, (1, 0, 2)),
+    # Individual high-res overlaid projections (only for selected views)
+    projections = []
+    if 'front' in views:
+        projections.append(('front', np.transpose(front_rgb, (1, 0, 2)),
          [volume_min[0], volume_max[0], volume_min[1], volume_max[1]],
-         'X (m)', 'Y (m)', px, py),
-        ('side', side_rgb,
+         'X (m)', 'Y (m)', px, py))
+    if 'side' in views:
+        projections.append(('side', side_rgb,
          [volume_min[2], volume_max[2], volume_min[1], volume_max[1]],
-         'Z (m)', 'Y (m)', pz, py),
-        ('top', np.transpose(top_rgb, (1, 0, 2)),
+         'Z (m)', 'Y (m)', pz, py))
+    if 'top' in views:
+        projections.append(('top', np.transpose(top_rgb, (1, 0, 2)),
          [volume_min[0], volume_max[0], volume_min[2], volume_max[2]],
-         'X (m)', 'Z (m)', px, pz)
-    ]
+         'X (m)', 'Z (m)', px, pz))
 
     for name, proj, extent, xlabel, ylabel, scatter_x, scatter_y in projections:
         plt.figure(figsize=(10, 10))
@@ -1063,14 +1104,14 @@ def visualize_orthographic_with_pointcloud(volume_rgb, relay_pos, relay_colors,
         plt.title(f'{name.capitalize()} View - Reconstruction + Point Cloud')
 
         save_path = os.path.join(output_dir, f'{output_name}_{name}_overlay.png')
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300)
         plt.close()
         print(f"  Saved: {save_path}")
 
 
 def visualize_direct_vs_indirect(transient_original, indirect, direct_mask,
                                   start_opl, bin_width, output_dir, output_name,
-                                  pixel_h=None, pixel_w=None):
+                                  pixel_h=None, pixel_w=None, use_log_scale=False):
     """
     Visualize the original transient vs the filtered indirect transient at a single pixel.
 
@@ -1084,6 +1125,7 @@ def visualize_direct_vs_indirect(transient_original, indirect, direct_mask,
         output_name: Output filename prefix
         pixel_h: Row index of pixel to visualize (default: center)
         pixel_w: Column index of pixel to visualize (default: center)
+        use_log_scale: If True, use log scale for transient traces
     """
     os.makedirs(output_dir, exist_ok=True)
     H, W, T = transient_original.shape
@@ -1101,57 +1143,58 @@ def visualize_direct_vs_indirect(transient_original, indirect, direct_mask,
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
 
-    # Row 1: Spatial views with selected pixel marked
-    # 1.1 Original transient - max over time
+    eps = 1e-10
     orig_max = np.max(transient_original, axis=2)
-    im00 = axes[0, 0].imshow(orig_max, cmap='hot', origin='lower')
-    axes[0, 0].scatter([pixel_w], [pixel_h], c='cyan', s=100, marker='x', linewidths=2)
+    indirect_max = np.max(indirect, axis=2)
+    direct_energy = np.sum(transient_original * direct_mask, axis=2)
+
+    # Row 1: Spatial views with selected pixel marked
+    # Apply log scale for spatial images if enabled
+    im00 = axes[0, 0].imshow(orig_max, cmap='hot', origin='upper')
+    plt.colorbar(im00, ax=axes[0, 0])
     axes[0, 0].set_title('Original: Max over time')
+    axes[0, 0].scatter([pixel_w], [pixel_h], c='cyan', s=100, marker='x', linewidths=2)
     axes[0, 0].set_xlabel('Pixel X')
     axes[0, 0].set_ylabel('Pixel Y')
-    plt.colorbar(im00, ax=axes[0, 0])
 
-    # 1.2 Indirect transient - max over time
-    indirect_max = np.max(indirect, axis=2)
-    im01 = axes[0, 1].imshow(indirect_max, cmap='hot', origin='lower')
-    axes[0, 1].scatter([pixel_w], [pixel_h], c='cyan', s=100, marker='x', linewidths=2)
+    im01 = axes[0, 1].imshow(indirect_max, cmap='hot', origin='upper')
+    plt.colorbar(im01, ax=axes[0, 1])
     axes[0, 1].set_title('Indirect: Max over time')
+    axes[0, 1].scatter([pixel_w], [pixel_h], c='cyan', s=100, marker='x', linewidths=2)
     axes[0, 1].set_xlabel('Pixel X')
     axes[0, 1].set_ylabel('Pixel Y')
-    plt.colorbar(im01, ax=axes[0, 1])
 
-    # 1.3 Direct peak energy (what was removed)
-    direct_energy = np.sum(transient_original * direct_mask, axis=2)
-    im02 = axes[0, 2].imshow(direct_energy, cmap='hot', origin='lower')
+    im02 = axes[0, 2].imshow(direct_energy, cmap='hot', origin='upper')
+    plt.colorbar(im02, ax=axes[0, 2])
+    axes[0, 2].set_title('Direct Peak Energy')
     axes[0, 2].scatter([pixel_w], [pixel_h], c='cyan', s=100, marker='x', linewidths=2)
-    axes[0, 2].set_title('Direct Peak Energy (removed)')
     axes[0, 2].set_xlabel('Pixel X')
     axes[0, 2].set_ylabel('Pixel Y')
-    plt.colorbar(im02, ax=axes[0, 2])
 
     # Row 2: Temporal traces at selected pixel
     orig_trace = transient_original[pixel_h, pixel_w, :]
     indirect_trace = indirect[pixel_h, pixel_w, :]
     mask_trace = direct_mask[pixel_h, pixel_w, :]
 
-    # 2.1 Original transient trace
-    axes[1, 0].plot(time_axis, orig_trace, 'b-', linewidth=1)
+    # Transient trace plots
+    axes[1, 0].plot(time_axis, orig_trace + (eps if use_log_scale else 0), 'b-', linewidth=1)
     axes[1, 0].set_xlabel('OPL (m)')
     axes[1, 0].set_ylabel('Intensity')
     axes[1, 0].set_title(f'Original Transient at ({pixel_h}, {pixel_w})')
     axes[1, 0].set_xlim([time_axis[0], time_axis[-1]])
+    if use_log_scale:
+        axes[1, 0].set_yscale('log')
 
-    # 2.2 Indirect transient trace
-    axes[1, 1].plot(time_axis, indirect_trace, 'g-', linewidth=1)
+    axes[1, 1].plot(time_axis, indirect_trace + (eps if use_log_scale else 0), 'g-', linewidth=1)
     axes[1, 1].set_xlabel('OPL (m)')
     axes[1, 1].set_ylabel('Intensity')
     axes[1, 1].set_title(f'Indirect Transient at ({pixel_h}, {pixel_w})')
     axes[1, 1].set_xlim([time_axis[0], time_axis[-1]])
+    if use_log_scale:
+        axes[1, 1].set_yscale('log')
 
-    # 2.3 Overlay comparison with mask
-    axes[1, 2].plot(time_axis, orig_trace, 'b-', linewidth=1, alpha=0.7, label='Original')
-    axes[1, 2].plot(time_axis, indirect_trace, 'g-', linewidth=1, alpha=0.7, label='Indirect')
-    # Shade the masked region
+    axes[1, 2].plot(time_axis, orig_trace + (eps if use_log_scale else 0), 'b-', linewidth=1, alpha=0.7, label='Original')
+    axes[1, 2].plot(time_axis, indirect_trace + (eps if use_log_scale else 0), 'g-', linewidth=1, alpha=0.7, label='Indirect')
     mask_indices = np.where(mask_trace)[0]
     if len(mask_indices) > 0:
         mask_start = time_axis[mask_indices[0]]
@@ -1162,10 +1205,11 @@ def visualize_direct_vs_indirect(transient_original, indirect, direct_mask,
     axes[1, 2].set_title(f'Comparison at ({pixel_h}, {pixel_w})')
     axes[1, 2].legend()
     axes[1, 2].set_xlim([time_axis[0], time_axis[-1]])
+    if use_log_scale:
+        axes[1, 2].set_yscale('log')
 
-    plt.tight_layout()
     save_path = os.path.join(output_dir, f'{output_name}_direct_vs_indirect.png')
-    plt.savefig(save_path, dpi=250, bbox_inches='tight')
+    plt.savefig(save_path, dpi=250)
     plt.close()
     print(f"  Saved direct vs indirect visualization: {save_path}")
 
@@ -1273,7 +1317,7 @@ def save_results(volume, relay_depths, output_dir, output_name):
 
 
 def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
-                     output_dir, output_name):
+                     output_dir, output_name, use_log_scale=False):
     """
     Visualize detected relay wall depths and direct peak detection.
 
@@ -1285,14 +1329,16 @@ def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
         bin_width: Bin width in OPL
         output_dir: Output directory
         output_name: Output filename prefix
+        use_log_scale: If True, use log scale for transient traces
     """
     os.makedirs(output_dir, exist_ok=True)
     H, W, T = transient.shape
+    eps = 1e-10
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
     # 1. Relay depths image
-    im0 = axes[0, 0].imshow(relay_depths, cmap='viridis', origin='lower')
+    im0 = axes[0, 0].imshow(relay_depths, cmap='viridis', origin='upper')
     axes[0, 0].set_title('Detected Relay Wall Depths')
     axes[0, 0].set_xlabel('Pixel X')
     axes[0, 0].set_ylabel('Pixel Y')
@@ -1309,7 +1355,7 @@ def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
 
     # 3. Direct peak bin indices
     direct_bins = (relay_depths * 2 - start_opl) / bin_width
-    im2 = axes[0, 2].imshow(direct_bins, cmap='plasma', origin='lower')
+    im2 = axes[0, 2].imshow(direct_bins, cmap='plasma', origin='upper')
     axes[0, 2].set_title('Direct Peak Bin Index')
     axes[0, 2].set_xlabel('Pixel X')
     axes[0, 2].set_ylabel('Pixel Y')
@@ -1328,7 +1374,7 @@ def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
         if 0 <= h_idx < H and 0 <= w_idx < W:
             trace = transient[h_idx, w_idx, :]
             depth = relay_depths[h_idx, w_idx]
-            axes[1, 0].plot(time_axis, trace, color=color, alpha=0.7,
+            axes[1, 0].plot(time_axis, trace + (eps if use_log_scale else 0), color=color, alpha=0.7,
                            label=f'({h_idx},{w_idx}), d={depth:.2f}m')
             # Mark direct peak location
             peak_opl = depth * 2
@@ -1336,19 +1382,23 @@ def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
 
     axes[1, 0].set_xlabel('OPL (m)')
     axes[1, 0].set_ylabel('Intensity')
-    axes[1, 0].set_title('Example Transient Traces (dashed = detected peak)')
+    axes[1, 0].set_title('Example Transient Traces' + (' (log scale)' if use_log_scale else ''))
     axes[1, 0].legend(fontsize=8)
     axes[1, 0].set_xlim([time_axis[0], time_axis[-1]])
+    if use_log_scale:
+        axes[1, 0].set_yscale('log')
 
     # 5. Sum of transient over spatial dims (temporal profile)
     temporal_sum = transient.sum(axis=(0, 1))
-    axes[1, 1].plot(time_axis, temporal_sum, 'b-')
+    axes[1, 1].plot(time_axis, temporal_sum + (eps if use_log_scale else 0), 'b-')
     axes[1, 1].set_xlabel('OPL (m)')
     axes[1, 1].set_ylabel('Total Intensity')
-    axes[1, 1].set_title('Spatially-Summed Transient')
+    axes[1, 1].set_title('Spatially-Summed Transient' + (' (log scale)' if use_log_scale else ''))
     axes[1, 1].axvline(relay_depths.mean() * 2, color='r', linestyle='--',
                        label=f'Mean direct OPL: {relay_depths.mean()*2:.2f}m')
     axes[1, 1].legend()
+    if use_log_scale:
+        axes[1, 1].set_yscale('log')
 
     # 6. Direct vs indirect energy
     direct_energy = transient[direct_mask].sum()
@@ -1360,12 +1410,13 @@ def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
                    color=['orange', 'blue', 'green'])
     axes[1, 2].set_ylabel('Total Energy')
     axes[1, 2].set_title('Energy Distribution')
+    if use_log_scale:
+        axes[1, 2].set_yscale('log')
     for i, v in enumerate([direct_energy, indirect_energy, total_energy]):
-        axes[1, 2].text(i, v * 1.02, f'{v:.2e}', ha='center', fontsize=9)
+        axes[1, 2].text(i, v * 1.1, f'{v:.2e}', ha='center', fontsize=9)
 
-    plt.tight_layout()
     save_path = os.path.join(output_dir, f'{output_name}_depths_debug.png')
-    plt.savefig(save_path, dpi=250, bbox_inches='tight')
+    plt.savefig(save_path, dpi=250)
     plt.close()
     print(f"  Saved depth visualization: {save_path}")
 
@@ -1462,9 +1513,8 @@ def visualize_phasors(phasor_cos, phasor_sin, start_opl, bin_width, wavelength,
     # Add wavelength info
     fig.suptitle(f'Phasor Field Analysis (wavelength = {wavelength} m)', fontsize=12)
 
-    plt.tight_layout()
     save_path = os.path.join(output_dir, f'{output_name}_phasors_debug.png')
-    plt.savefig(save_path, dpi=250, bbox_inches='tight')
+    plt.savefig(save_path, dpi=250)
     plt.close()
     print(f"  Saved phasor visualization: {save_path}")
 
@@ -1686,18 +1736,24 @@ def main():
     # Determine output name early for visualizations
     output_name = args.output_name or os.path.splitext(os.path.basename(args.transient_file))[0].replace('_transient', '_reconstruction')
 
+    # Create output directory: vis/{output_name}/
+    output_dir = os.path.join(args.output_dir, output_name)
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"  Output directory: {output_dir}")
+
     # Visualize depths for debugging (using direct file transient)
     print("\n  Generating depth visualizations...")
     visualize_depths(relay_depths, transient_direct, direct_mask, start_opl, bin_width,
-                     args.output_dir, output_name)
+                     output_dir, output_name, use_log_scale=args.transient_log)
 
     # Visualize direct vs indirect transient
     print("\n  Generating direct vs indirect visualization...")
     debug_pixel_h = args.debug_pixel[0] if args.debug_pixel else None
     debug_pixel_w = args.debug_pixel[1] if args.debug_pixel else None
     visualize_direct_vs_indirect(transient_direct, indirect, direct_mask,
-                                  start_opl, bin_width, args.output_dir, output_name,
-                                  pixel_h=debug_pixel_h, pixel_w=debug_pixel_w)
+                                  start_opl, bin_width, output_dir, output_name,
+                                  pixel_h=debug_pixel_h, pixel_w=debug_pixel_w,
+                                  use_log_scale=args.transient_log)
 
     # 4. Compute relay wall 3D positions by unprojecting camera rays
     print("\n[4/7] Computing relay wall positions (unprojecting camera rays)...")
@@ -1729,7 +1785,7 @@ def main():
 
         # Visualize normals (computed from finite differences)
         print("\n  Generating relay normals visualization...")
-        visualize_relay_normals(relay_pos, relay_normals, camera_origin, args.output_dir, output_name)
+        visualize_relay_normals(relay_pos, relay_normals, camera_origin, output_dir, output_name)
 
     # 5. Determine volume bounds
     print("\n[5/7] Setting up reconstruction volume...")
@@ -1772,7 +1828,7 @@ def main():
     # Visualize phasors for debugging
     print("\n  Generating phasor visualizations...")
     visualize_phasors(phasor_cos, phasor_sin, start_opl, bin_width, args.wavelength,
-                      args.output_dir, output_name)
+                      output_dir, output_name)
 
     # 7. Phasor backprojection with DrJit (GPU) - Luminance
     falloff_str = "no falloff" if args.no_falloff else "1/r falloff"
@@ -1830,15 +1886,18 @@ def main():
 
     # 11. Visualize and save
     print(f"\n[11/11] Generating visualizations and saving...")
-    visualize_orthographic(volume, volume_min, volume_max, args.output_dir, output_name,
-                           vis_transform=args.vis_transform, vis_scale=args.vis_scale, vis_bias=args.vis_bias)
-    visualize_orthographic_color(volume_rgb, volume_min, volume_max, args.output_dir, output_name)
+    visualize_orthographic(volume, volume_min, volume_max, output_dir, output_name,
+                           vis_transform=args.vis_transform, vis_scale=args.vis_scale, vis_bias=args.vis_bias,
+                           views=args.ortho_views)
+    visualize_orthographic_color(volume_rgb, volume_min, volume_max, output_dir, output_name,
+                                  views=args.ortho_views)
     visualize_orthographic_with_pointcloud(volume_rgb, relay_pos, relay_colors,
-                                           volume_min, volume_max, args.output_dir, output_name)
-    save_results(volume, relay_depths, args.output_dir, output_name)
+                                           volume_min, volume_max, output_dir, output_name,
+                                           views=args.ortho_views)
+    save_results(volume, relay_depths, output_dir, output_name)
 
     # Also save RGB volume
-    volume_rgb_path = os.path.join(args.output_dir, f'{output_name}_volume_rgb.npy')
+    volume_rgb_path = os.path.join(output_dir, f'{output_name}_volume_rgb.npy')
     np.save(volume_rgb_path, volume_rgb)
     print(f"  Saved RGB volume: {volume_rgb_path}")
 
