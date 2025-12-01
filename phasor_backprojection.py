@@ -108,6 +108,10 @@ def parse_args():
                         help='Output name prefix (default: derived from input)')
     parser.add_argument('--debug-pixel', type=int, nargs=2, default=None, metavar=('H', 'W'),
                         help='Pixel (row, col) to use for debug visualizations (default: center)')
+    parser.add_argument('--pixel-min', type=int, nargs=2, default=None, metavar=('X', 'Y'),
+                        help='Minimum pixel coordinates (x, y) for relay point selection. If not specified, uses full image.')
+    parser.add_argument('--pixel-max', type=int, nargs=2, default=None, metavar=('X', 'Y'),
+                        help='Maximum pixel coordinates (x, y) for relay point selection. If not specified, uses full image.')
     parser.add_argument('--normalize-slices', type=str, default=None, choices=['x', 'y', 'z', 'none'],
                         help='Normalize intensity per slice along axis (x, y, z, or none). Default: none')
     parser.add_argument('--vis-transform', type=str, default='none',
@@ -177,7 +181,7 @@ def load_scene_params(scene_path):
     }
 
 
-def compute_relay_positions_from_camera(relay_depths, sensor, camera_origin):
+def compute_relay_positions_from_camera(relay_depths, sensor, camera_origin, pixel_offset=None):
     """
     Compute 3D positions of relay wall points by unprojecting camera rays.
 
@@ -192,6 +196,9 @@ def compute_relay_positions_from_camera(relay_depths, sensor, camera_origin):
         relay_depths: (H, W) depth values from direct peak detection
         sensor: Mitsuba sensor object
         camera_origin: (3,) camera position in world space
+        pixel_offset: Optional (x_offset, y_offset) tuple for cropped data.
+                      When provided, pixel coordinates are shifted by this offset
+                      to correctly map to full-resolution camera rays.
 
     Returns:
         relay_pos: (H, W, 3) array of 3D world-space positions
@@ -202,10 +209,14 @@ def compute_relay_positions_from_camera(relay_depths, sensor, camera_origin):
     film = sensor.film()
     film_w, film_h = film.size()
 
-    # Create grid of normalized pixel coordinates (vectorized)
+    # Create grid of pixel coordinates
+    # If pixel_offset is provided, shift coordinates accordingly
+    x_offset = pixel_offset[0] if pixel_offset else 0
+    y_offset = pixel_offset[1] if pixel_offset else 0
+
     # j corresponds to columns (x), i corresponds to rows (y)
-    j_coords = np.arange(W, dtype=np.float32)
-    i_coords = np.arange(H, dtype=np.float32)
+    j_coords = np.arange(W, dtype=np.float32) + x_offset
+    i_coords = np.arange(H, dtype=np.float32) + y_offset
     jj, ii = np.meshgrid(j_coords, i_coords)  # shape (H, W)
 
     u_coords = (jj + 0.5) / film_w  # shape (H, W)
@@ -385,6 +396,33 @@ def load_transient(path, return_rgb=False):
     if return_rgb:
         return luminance.astype(np.float32), rgb
     return luminance.astype(np.float32)
+
+
+def crop_to_pixel_range(data, pixel_min, pixel_max, full_height, full_width):
+    """
+    Crop data arrays to specified pixel range.
+
+    Args:
+        data: Array with spatial dimensions as first two axes (H, W, ...)
+        pixel_min: (x, y) minimum pixel coordinates (inclusive)
+        pixel_max: (x, y) maximum pixel coordinates (exclusive)
+        full_height: Original image height
+        full_width: Original image width
+
+    Returns:
+        Cropped data array
+    """
+    x_min, y_min = pixel_min
+    x_max, y_max = pixel_max
+
+    # Clamp to valid range
+    x_min = max(0, x_min)
+    y_min = max(0, y_min)
+    x_max = min(full_width, x_max)
+    y_max = min(full_height, y_max)
+
+    # Note: data is (H, W, ...) where H is rows (y) and W is columns (x)
+    return data[y_min:y_max, x_min:x_max]
 
 
 def detect_direct_peaks(transient, start_opl, bin_width, threshold_percentile=95, peak_width=5,
@@ -1316,7 +1354,7 @@ def save_results(volume, relay_depths, output_dir, output_name):
 
 
 def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
-                     output_dir, output_name, use_log_scale=False):
+                     output_dir, output_name, use_log_scale=False, pixel_range=None):
     """
     Visualize detected relay wall depths and direct peak detection.
 
@@ -1329,7 +1367,11 @@ def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
         output_dir: Output directory
         output_name: Output filename prefix
         use_log_scale: If True, use log scale for transient traces
+        pixel_range: Optional (x_min, y_min, x_max, y_max) tuple to draw a red outline
+                     showing the selected pixel region for backprojection
     """
+    from matplotlib.patches import Rectangle
+
     os.makedirs(output_dir, exist_ok=True)
     H, W, T = transient.shape
     eps = 1e-10
@@ -1342,6 +1384,14 @@ def visualize_depths(relay_depths, transient, direct_mask, start_opl, bin_width,
     axes[0, 0].set_xlabel('Pixel X')
     axes[0, 0].set_ylabel('Pixel Y')
     plt.colorbar(im0, ax=axes[0, 0], label='Depth (m)')
+
+    # Draw red outline for pixel range if specified
+    if pixel_range is not None:
+        x_min, y_min, x_max, y_max = pixel_range
+        rect = Rectangle((x_min - 0.5, y_min - 0.5), x_max - x_min, y_max - y_min,
+                         linewidth=2, edgecolor='red', facecolor='none', linestyle='--')
+        axes[0, 0].add_patch(rect)
+        axes[0, 0].set_title('Detected Relay Wall Depths (red = selected region)')
 
     # 2. Depth histogram
     axes[0, 1].hist(relay_depths.flatten(), bins=50, edgecolor='black', alpha=0.7)
@@ -1704,6 +1754,33 @@ def main():
         print(f"  Luminance shape: {transient_direct.shape}")
         print(f"  RGB shape: {transient_direct_rgb.shape}")
 
+    # Store full image dimensions for reference
+    full_height, full_width = transient_direct.shape[:2]
+
+    # Handle pixel range filtering
+    pixel_offset = None
+    pixel_range = None  # (x_min, y_min, x_max, y_max) for visualization
+    if args.pixel_min is not None or args.pixel_max is not None:
+        # Set defaults for unspecified bounds
+        x_min = args.pixel_min[0] if args.pixel_min else 0
+        y_min = args.pixel_min[1] if args.pixel_min else 0
+        x_max = args.pixel_max[0] if args.pixel_max else full_width
+        y_max = args.pixel_max[1] if args.pixel_max else full_height
+
+        # Clamp to valid range
+        x_min = max(0, x_min)
+        y_min = max(0, y_min)
+        x_max = min(full_width, x_max)
+        y_max = min(full_height, y_max)
+
+        pixel_range = (x_min, y_min, x_max, y_max)
+        pixel_offset = (x_min, y_min)
+
+        print(f"\n  Applying pixel range filter:")
+        print(f"    X range: [{x_min}, {x_max}) (columns)")
+        print(f"    Y range: [{y_min}, {y_max}) (rows)")
+        print(f"    Region size: {x_max - x_min} x {y_max - y_min} pixels")
+
     # 3. Detect direct peaks and extract relay geometry (using direct file)
     print("\n[3/7] Detecting direct peaks...")
     relay_depths, direct_mask, indirect, valid_mask = detect_direct_peaks(
@@ -1733,17 +1810,18 @@ def main():
     transient_rgb = transient_direct_rgb
 
     # Determine output name early for visualizations
-    output_name = args.output_name or os.path.splitext(os.path.basename(args.transient_file))[0].replace('_transient', '_reconstruction')
+    output_name = args.output_name or os.path.dirname(args.transient_file) + '_phasor_bp'
 
     # Create output directory: vis/{output_name}/
     output_dir = os.path.join(args.output_dir, output_name)
     os.makedirs(output_dir, exist_ok=True)
     print(f"  Output directory: {output_dir}")
 
-    # Visualize depths for debugging (using direct file transient)
+    # Visualize depths for debugging (on full data, with red outline if pixel range specified)
     print("\n  Generating depth visualizations...")
     visualize_depths(relay_depths, transient_direct, direct_mask, start_opl, bin_width,
-                     output_dir, output_name, use_log_scale=args.transient_log)
+                     output_dir, output_name, use_log_scale=args.transient_log,
+                     pixel_range=pixel_range)
 
     # Visualize direct vs indirect transient
     print("\n  Generating direct vs indirect visualization...")
@@ -1754,12 +1832,29 @@ def main():
                                   pixel_h=debug_pixel_h, pixel_w=debug_pixel_w,
                                   use_log_scale=args.transient_log)
 
+    # Apply pixel range cropping for backprojection
+    if pixel_range is not None:
+        x_min, y_min, x_max, y_max = pixel_range
+        print(f"\n  Cropping data for backprojection to pixel range [{x_min}:{x_max}, {y_min}:{y_max}]...")
+
+        # Crop all relevant arrays
+        relay_depths = relay_depths[y_min:y_max, x_min:x_max]
+        indirect = indirect[y_min:y_max, x_min:x_max]
+        indirect_rgb = indirect_rgb[y_min:y_max, x_min:x_max]
+        valid_mask = valid_mask[y_min:y_max, x_min:x_max]
+        direct_mask = direct_mask[y_min:y_max, x_min:x_max]
+        transient_rgb = transient_rgb[y_min:y_max, x_min:x_max]
+
+        print(f"    Cropped relay_depths shape: {relay_depths.shape}")
+        print(f"    Cropped indirect shape: {indirect.shape}")
+
     # 4. Compute relay wall 3D positions by unprojecting camera rays
     print("\n[4/7] Computing relay wall positions (unprojecting camera rays)...")
     relay_pos = compute_relay_positions_from_camera(
         relay_depths,
         scene_params['sensor'],
-        scene_params['camera_origin']
+        scene_params['camera_origin'],
+        pixel_offset=pixel_offset
     )
     # Report position range for valid pixels only
     valid_pos = relay_pos[valid_mask]

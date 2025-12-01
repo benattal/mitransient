@@ -59,16 +59,18 @@
             <scale x="2.0" y="2.0" z="0.25"/>
             <translate x="0.0" y="-2.0" z="-0.5"/>
         </transform>
-        <bsdf type="diffuse">
-            <rgb name="reflectance" value="0.2, 0.0, 0.0"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.01, 0.0, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
         </bsdf>
     </shape>
 
     <shape type="sphere">
         <point name="center" x="0.0" y="-0.75" z="-0.75"/>
         <float name="radius" value="0.25"/>
-        <bsdf type="diffuse">
-            <rgb name="reflectance" value="0.0, 0.8, 0.0"/>
+        <bsdf type="retroreflector">
+            <rgb name="reflectance" value="0.01, 0.0, 0.0"/>
+            <float name="lobe_exponent" value="100.0"/>
         </bsdf>
     </shape>
 </scene>
