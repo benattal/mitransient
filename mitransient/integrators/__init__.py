@@ -15,4 +15,7 @@ if mi.variant() is not None and not mi.variant().startswith('scalar'):
     from . import transientnlospath
     importlib.reload(transientnlospath)
 
+    from . import timegated_transientpath
+    importlib.reload(timegated_transientpath)
+
 del importlib, mi

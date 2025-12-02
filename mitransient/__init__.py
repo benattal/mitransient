@@ -31,6 +31,7 @@ from .films import *
 from .sensors import *
 from .emitters import *
 from .bsdfs import *
+from . import pulses
 
 from .utils import speed_of_light, cornell_box
 from . import nlos

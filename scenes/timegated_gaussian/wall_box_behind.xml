@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <scene version="3.0.0">
-    <!-- Camera at origin, looking down -Z toward the wall -->
+    <!-- Camera at origin, looking down -Z -->
     <sensor type="perspective">
         <string name="fov_axis" value="smaller"/>
         <float name="fov" value="45"/>
@@ -9,12 +9,13 @@
                     target="0, 0, -1"
                     up="0, 1, 0"/>
         </transform>
+
         <film type="transient_hdr_film">
             <integer name="width" value="128"/>
             <integer name="height" value="128"/>
             <integer name="temporal_bins" value="1000"/>
             <float name="bin_width_opl" value="0.01"/>
-            <float name="start_opl" value="0.0"/>
+            <float name="start_opl" value="0.5"/>
             <rfilter type="box"/>
         </film>
 
@@ -23,13 +24,11 @@
         </sampler>
     </sensor>
 
-    <!-- Integrator with confocal projector -->
-    <integrator type="transient_path">
+    <!-- Time-Gated Integrator with Gaussian Pulse -->
+    <integrator type="timegated_transient_path">
         <boolean name="camera_unwarp" value="false"/>
         <boolean name="use_nlos_only" value="false"/>
         <integer name="max_depth" value="8"/>
-        <string name="temporal_filter" value="box"/>
-        <float name="gaussian_stddev" value="0.5"/>
 
         <emitter type="confocal_projector" name="confocal_projector">
             <integer name="grid_rows" value="1"/>
@@ -40,13 +39,16 @@
             <float name="fov" value="0.78"/>
             <boolean name="is_confocal" value="true"/>
             <integer name="max_rejection_samples" value="4"/>
+            <!-- Pulse configuration on projector -->
+            <string name="pulse_type" value="gaussian"/>
+            <float name="pulse_width_opl" value="0.003"/>
         </emitter>
     </integrator>
 
-    <!-- Relay wall at z=-2.0, facing +Z (toward camera) -->
+    <!-- Wall in front of camera at z=-3, perpendicular to view direction -->
     <shape type="rectangle">
         <transform name="to_world">
-            <scale x="2.0" y="2.0" z="1.0"/>
+            <scale x="2" y="2" z="1"/>
             <translate x="0" y="0" z="-2.0"/>
         </transform>
         <bsdf type="diffuse">
@@ -54,14 +56,14 @@
         </bsdf>
     </shape>
 
-    <!-- Red box (floor-like surface) - no sphere in this scene -->
+    <!-- Box behind the camera at z=+2 -->
     <shape type="cube">
         <transform name="to_world">
-            <scale x="2.0" y="2.0" z="0.25"/>
-            <translate x="0.0" y="-2.0" z="-0.5"/>
+            <scale x="0.5" y="0.5" z="0.001"/>
+            <translate x="0.0" y="0.0" z="0.25"/>
         </transform>
         <bsdf type="diffuse">
-            <rgb name="reflectance" value="0.2, 0.0, 0.0"/>
+            <rgb name="reflectance" value="0.5, 0.5, 0.5"/>
         </bsdf>
     </shape>
 </scene>

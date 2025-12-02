@@ -1,19 +1,17 @@
 <scene version="3.3.0">
 
-	<default name="integrator" value="transient_path"/>
+	<default name="integrator" value="timegated_transient_path"/>
 	<default name="spp" value="4096" />
 	<default name="resx" value="128" />
 	<default name="resy" value="128" />
 
-	<!-- Transient Integrator with Confocal Projector -->
+	<!-- Time-Gated Transient Integrator with Confocal Projector and Gaussian Pulse -->
     <integrator type='$integrator'>
       <boolean name="camera_unwarp" value="false"/>
       <boolean name="use_nlos_only" value="false"/>
       <integer name="max_depth" value="8"/>
-      <string name="temporal_filter" value="box"/>
-	  <float name="gaussian_stddev" value="0.5"/>
 
-      <!-- Confocal Projector: single spot with sigma=0.001 -->
+      <!-- Confocal Projector: single spot with sigma=0.001 and Gaussian pulse -->
       <emitter type="confocal_projector" name="confocal_projector">
         <integer name="grid_rows" value="1"/>
         <integer name="grid_cols" value="1"/>
@@ -22,11 +20,16 @@
         <string name="grid_spacing" value="uniform"/>
         <float name="fov" value="0.55"/>
         <boolean name="is_confocal" value="true"/>
-        <integer name="max_rejection_samples" value="4"/>
+
+        <!-- Pulse configuration on projector -->
+        <string name="pulse_type" value="gaussian"/>
+		<float name="pulse_width_opl" value="0.003"/>
+
         <!-- Projector frame aligned with camera (same as camera to_world) -->
         <transform name="frame">
           <matrix value="0.7431448254773944, 0.0445099058461641, -0.6676485876924616, 1.1016201696925616, -0.0, 0.9977851578566088, 0.0665190105237739, 0.24024363263577303, 0.6691306063588581, -0.04943325846661892, 0.741498876999284, -1.2234731470488185, -0.0, 0.0, -0.0, 1.0" />
         </transform>
+
       </emitter>
     </integrator>
 
@@ -79,44 +82,31 @@
 	<bsdf type="diffuse" id="mat-torus">
 		<rgb value="1.000000 0.000000 0.300000" name="reflectance" />
 	</bsdf>
-	<!-- Red material for hidden object -->
-	<bsdf type="diffuse" id="mat-diffuse.hidden">
-		<rgb value="0.8 0.8 0.8" name="reflectance" />
-	</bsdf>
 
 	<shape type="obj">
-		<string name="filename" value="meshes/left-wall.obj" />
+		<string name="filename" value="../meshes/left-wall.obj" />
 		<boolean name="face_normals" value="true" />
 		<ref id="mat-diffuse.red" name="bsdf" />
 	</shape>
 	<shape type="obj">
-		<string name="filename" value="meshes/back-wall.obj" />
+		<string name="filename" value="../meshes/back-wall.obj" />
 		<boolean name="face_normals" value="true" />
 		<ref id="mat-diffuse.green" name="bsdf" />
 	</shape>
 	<shape type="obj">
-		<string name="filename" value="meshes/floor.obj" />
+		<string name="filename" value="../meshes/floor.obj" />
 		<boolean name="face_normals" value="true" />
 		<ref id="mat-diffuse.white" name="bsdf" />
 	</shape>
 	<shape type="ply">
-		<string name="filename" value="meshes/box_short.ply" />
+		<string name="filename" value="../meshes/box_short.ply" />
 		<boolean name="face_normals" value="true" />
 		<ref id="mat-diffuse.white" name="bsdf" />
 	</shape>
 	<shape type="ply">
-		<string name="filename" value="meshes/box_tall.ply" />
+		<string name="filename" value="../meshes/box_tall.ply" />
 		<boolean name="face_normals" value="true" />
 		<ref id="mat-diffuse.white" name="bsdf" />
-	</shape>
-
-	<!-- Hidden sphere at corner of both walls -->
-	<!-- Back wall (green) at X=-0.5, Left wall (red) at Z=0.5 -->
-	<!-- Center offset by radius to not clip walls -->
-	<shape type="sphere">
-		<point name="center" x="-0.38" y="0.34" z="0.38"/>
-		<float name="radius" value="0.09"/>
-		<ref id="mat-diffuse.hidden" name="bsdf" />
 	</shape>
 
 </scene>

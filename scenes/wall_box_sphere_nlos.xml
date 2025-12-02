@@ -23,13 +23,11 @@
         </sampler>
     </sensor>
 
-    <!-- Integrator with confocal projector -->
+    <!-- Integrator with confocal projector and Gaussian pulse -->
     <integrator type="transient_path">
         <boolean name="camera_unwarp" value="false"/>
         <boolean name="use_nlos_only" value="false"/>
         <integer name="max_depth" value="8"/>
-        <string name="temporal_filter" value="box"/>
-        <float name="gaussian_stddev" value="0.5"/>
 
         <emitter type="confocal_projector" name="confocal_projector">
             <integer name="grid_rows" value="1"/>
@@ -40,6 +38,9 @@
             <float name="fov" value="0.78"/>
             <boolean name="is_confocal" value="true"/>
             <integer name="max_rejection_samples" value="4"/>
+            <!-- Pulse configuration -->
+            <string name="pulse_type" value="gaussian"/>
+            <float name="pulse_width_opl" value="0.005"/>
         </emitter>
     </integrator>
 

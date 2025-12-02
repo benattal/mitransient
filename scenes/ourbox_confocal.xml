@@ -5,15 +5,13 @@
 	<default name="resx" value="128" />
 	<default name="resy" value="128" />
 
-	<!-- Transient Integrator with Confocal Projector -->
+	<!-- Transient Integrator with Confocal Projector and Gaussian Pulse -->
     <integrator type='$integrator'>
       <boolean name="camera_unwarp" value="false"/>
       <boolean name="use_nlos_only" value="false"/>
       <integer name="max_depth" value="8"/>
-      <string name="temporal_filter" value="box"/>
-	  <float name="gaussian_stddev" value="0.5"/>
 
-      <!-- Confocal Projector: single spot with sigma=0.001 -->
+      <!-- Confocal Projector: single spot with sigma=0.001 and Gaussian pulse -->
       <emitter type="confocal_projector" name="confocal_projector">
         <integer name="grid_rows" value="1"/>
         <integer name="grid_cols" value="1"/>
@@ -27,6 +25,9 @@
         <transform name="frame">
           <matrix value="0.7431448254773944, 0.0445099058461641, -0.6676485876924616, 1.1016201696925616, -0.0, 0.9977851578566088, 0.0665190105237739, 0.24024363263577303, 0.6691306063588581, -0.04943325846661892, 0.741498876999284, -1.2234731470488185, -0.0, 0.0, -0.0, 1.0" />
         </transform>
+        <!-- Pulse configuration -->
+        <string name="pulse_type" value="gaussian"/>
+        <float name="pulse_width_opl" value="0.005"/>
       </emitter>
     </integrator>
 

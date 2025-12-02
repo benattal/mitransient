@@ -16,14 +16,9 @@ class TransientPath(TransientADIntegrator):
 
     Standard path tracing algorithm which now includes the time dimension.
 
-    .. note::
-        If you want to simulate a Non-Line-of-Sight (NLOS) setup, look into the
-        ``transient_nlos_path`` plugin, which contains different sampling routines
-        specific to NLOS setups that greatly increase the quality of your results.
-
-    .. note::
-        This integrator does not handle participating media. Instead, you should use
-        our ``transient_prbvolpath`` plugin.
+    This integrator requires a confocal_projector emitter for light source sampling.
+    If the projector has a pulse shape configured, pulse time offsets are importance
+    sampled and contributions are added at ``path_distance + pulse_time_offset``.
 
     .. tabs::
 
@@ -31,13 +26,17 @@ class TransientPath(TransientADIntegrator):
 
             <integrator type="transient_path">
                 <integer name="max_depth" value="8"/>
+                <emitter type="confocal_projector" name="confocal_projector">
+                    ...
+                </emitter>
             </integrator>
 
         .. code-tab:: python
 
             {
                 'type': 'transient_path',
-                'max_depth': 8
+                'max_depth': 8,
+                'confocal_projector': { ... }
             }
 
     .. pluginparameters::
@@ -49,25 +48,6 @@ class TransientPath(TransientADIntegrator):
          the transient video with the events happening in world time. If False,
          this distance is taken into account, so you see the same thing that you
          would see with a real-world ultra-fast camera. (default: false)
-
-     * - temporal_filter
-       - |string|
-       - Can be either:
-         - 'box' for a box filter (no parameters)
-         - 'gaussian' for a Gaussian filter (see gaussian_stddev below)
-         - Empty string to use the same filter in the temporal domain as
-         the rfilter used in the spatial domain.
-         (default: empty string)
-
-     * - gaussian_stddev
-       - |float|
-       - When temporal_filter == 'gaussian', this marks the standard deviation
-         of the Gaussian filter. (default: 2.0)
-
-     * - block_size
-       - |int|
-       - Size of (square) image blocks to render in parallel (in scalar mode).
-         Should be a power of two. (default: 0 i.e. let Mitsuba decide for you)
 
      * - max_depth
        - |int|
@@ -86,8 +66,9 @@ class TransientPath(TransientADIntegrator):
      * - confocal_projector
        - |emitter|
        - Reference to a ConfocalProjector emitter for custom light source sampling.
-         When set, uses the projector's sampling methods instead of standard
-         emitter sampling. (default: None)
+         Uses the projector's sampling methods for emitter sampling. If the projector
+         has a pulse shape configured, pulse time offsets are importance sampled and
+         contributions are added at ``path_distance + pulse_time_offset``. (required)
 
      * - use_nlos_only
        - |bool|
@@ -95,12 +76,94 @@ class TransientPath(TransientADIntegrator):
          intersection point to the camera hits a piece of geometry before
          reaching the camera. This ensures that we only directly illuminate
          the NLOS scene and exclude direct line-of-sight paths. (default: false)
+
+     * - pulse_samples
+       - |int|
+       - Number of samples to take from the pulse distribution per path vertex.
+         Multiple samples reduce variance by spreading contributions across the
+         pulse shape. Each sample is weighted by 1/(pulse_samples * pdf).
+         (default: 1)
     """
 
     def __init__(self, props: mi.Properties):
         super().__init__(props)
         self.confocal_projector = props.get("confocal_projector", None)
         self.use_nlos_only = props.get("use_nlos_only", True)
+        self.pulse_samples = props.get("pulse_samples", 1)
+
+    def _apply_nlos_filter(self,
+                           scene: mi.Scene,
+                           si: mi.SurfaceInteraction3f,
+                           camera_origin: mi.Point3f,
+                           has_hit_nlos_point: mi.Bool,
+                           Lr_dir: mi.Spectrum,
+                           L: mi.Spectrum) -> Tuple[mi.Bool, mi.Spectrum, mi.Spectrum]:
+        """
+        Apply NLOS-only filtering to zero out contributions from directly visible points.
+
+        Args:
+            scene: The scene
+            si: Current surface interaction
+            camera_origin: Camera origin position
+            has_hit_nlos_point: Tracking state for whether we've hit an NLOS point
+            Lr_dir: Direct lighting contribution
+            L: Accumulated radiance
+
+        Returns:
+            Tuple of (updated_has_hit_nlos_point, filtered_Lr_dir, filtered_L)
+        """
+        # Check if current point is directly visible from camera
+        point_direction = dr.normalize(si.p - camera_origin)
+        visibility_ray = mi.Ray3f(camera_origin, point_direction)
+
+        # Check if ray from camera hits the current point without hitting other geometry
+        si_visibility = scene.ray_intersect(visibility_ray, mi.Bool(True))
+
+        # Point is directly visible if the ray hits the current point (within epsilon)
+        epsilon_distance = 1e-4
+        is_directly_visible = si_visibility.is_valid() & (dr.norm(si_visibility.p - si.p) < epsilon_distance)
+
+        # Update tracking: if this point is NOT directly visible, mark that we've hit an NLOS point
+        has_hit_nlos_point = has_hit_nlos_point | ~is_directly_visible
+
+        # Zero out contributions if point is directly visible AND we haven't hit an NLOS point yet
+        should_zero_contribution = ~has_hit_nlos_point
+        Lr_dir = dr.select(should_zero_contribution, mi.Spectrum(0.0), Lr_dir)
+        L = dr.select(should_zero_contribution, mi.Spectrum(0.0), L)
+
+        return has_hit_nlos_point, Lr_dir, L
+
+    def _add_pulse_samples(self,
+                           sampler: mi.Sampler,
+                           add_transient: Callable[[mi.Spectrum, mi.Float, mi.UnpolarizedSpectrum, mi.Mask], None],
+                           Lr_dir: mi.Spectrum,
+                           path_distance: mi.Float,
+                           wavelengths: mi.UnpolarizedSpectrum,
+                           active: mi.Bool):
+        """
+        Take multiple samples from the pulse distribution and add contributions.
+
+        This computes the convolution: integral{path_contribution * pulse(t)} by
+        importance sampling from the pulse distribution.
+
+        Args:
+            sampler: Random number generator
+            add_transient: Callback to add transient contribution
+            Lr_dir: Direct lighting contribution (unweighted by pulse)
+            path_distance: Path distance to the light source
+            wavelengths: Ray wavelengths
+            active: Active lanes mask
+        """
+        for _ in range(self.pulse_samples):
+            # Sample time offset from pulse distribution
+            pulse_time_offset, pulse_weight = self.confocal_projector.sample_pulse(sampler.next_1d())
+
+            # Weight contribution by pulse_weight / num_samples
+            # For normalized pulses, pulse_weight = 1.0
+            sample_weight = pulse_weight / self.pulse_samples
+
+            add_transient(Lr_dir * sample_weight, path_distance + pulse_time_offset,
+                          wavelengths, active)
 
     @dr.syntax
     def sample(self,
@@ -123,9 +186,6 @@ class TransientPath(TransientADIntegrator):
         the role of the various parameters and return values.
         """
 
-        # Rendering a primal image? (vs performing forward/reverse-mode AD)
-        primal = mode == dr.ADMode.Primal
-
         # Standard BSDF evaluation context for path tracing
         bsdf_ctx = mi.BSDFContext()
 
@@ -134,9 +194,7 @@ class TransientPath(TransientADIntegrator):
         # Copy input arguments to avoid mutating the caller's state
         ray = mi.Ray3f(dr.detach(ray))
         depth = mi.UInt32(0)                          # Depth of current vertex
-        L = mi.Spectrum(0 if primal else state_in)    # Radiance accumulator
-        # Differential/adjoint radiance
-        δL = mi.Spectrum(δL if δL is not None else 0)
+        L = mi.Spectrum(0)                            # Radiance accumulator
 
         η = mi.Float(1)                               # Index of refraction
         active = mi.Bool(active)                      # Active SIMD lanes
@@ -144,47 +202,34 @@ class TransientPath(TransientADIntegrator):
 
         # Variables caching information from the previous bounce
         prev_si = dr.zeros(mi.SurfaceInteraction3f)
-        prev_bsdf_pdf = mi.Float(1.0)
-        prev_bsdf_delta = mi.Bool(True)
 
         # Store initial camera ray intersection for NLOS light source mode
-        si_initial = dr.zeros(mi.SurfaceInteraction3f)
         camera_origin = mi.Point3f(ray.o)  # Store camera origin for NLOS-only check
         camera_ray_direction = mi.Vector3f(ray.d)  # Store initial camera ray direction
 
         # Track if we've hit at least one non-directly-visible point (for use_nlos_only)
         has_hit_nlos_point = mi.Bool(False)
-        should_zero_contribution = mi.Bool(False)
-        is_directly_visible = mi.Bool(True)
 
         if self.camera_unwarp:
             si = scene.ray_intersect(mi.Ray3f(ray),
                                      ray_flags=mi.RayFlags.All,
                                      coherent=mi.Mask(True))
-
             distance[si.is_valid()] = -si.t
-
-        si_initial = scene.ray_intersect(mi.Ray3f(ray),
-                                        ray_flags=mi.RayFlags.All,
-                                        coherent=mi.Mask(True))
 
         while dr.hint(active,
                       max_iterations=self.max_depth,
-                      label="Transient Path (%s)" % mode.name):
+                      label="Transient Path"):
             active_next = mi.Bool(active)
 
-            # Compute a surface interaction that tracks derivatives arising
-            # from differentiable shape parameters (position, normals, etc.)
-            # In primal mode, this is just an ordinary ray tracing operation.
-            with dr.resume_grad(when=not primal):
-                si = scene.ray_intersect(ray,
-                                         ray_flags=mi.RayFlags.All,
-                                         coherent=(depth == 0))
+            # Compute surface interaction
+            si = scene.ray_intersect(ray,
+                                     ray_flags=mi.RayFlags.All,
+                                     coherent=(depth == 0))
 
             # Update distance
             distance += dr.select(active, si.t, 0.0) * η
 
-            # Get the BSDF, potentially computes texture-space differentials
+            # Get the BSDF
             bsdf = si.bsdf(ray)
 
             # ---------------------- Direct emission ----------------------
@@ -206,73 +251,39 @@ class TransientPath(TransientADIntegrator):
             active_em = active_next & mi.has_flag(
                 bsdf.flags(), mi.BSDFFlags.Smooth)
 
-            # Sample emitter: use confocal projector or standard emitter sampling
-
             # Check if this is the initial intersection point (depth == 0)
             is_initial_intersection = (depth == 0)
 
-            if self.confocal_projector is not None:
-                # For initial intersection: query projector directly with inverse square falloff
-                # For subsequent bounces: importance sample from the Gaussian spots
-                if is_initial_intersection:
-                    ds, em_weight = self.confocal_projector.query_direct(
-                        scene, si, camera_origin, camera_ray_direction, active_em
-                    )
-                else:
-                    ds, em_weight = self.confocal_projector.sample_emitter(
-                        scene, si, camera_origin, camera_ray_direction, sampler, active_em
-                    )
+            # Use confocal projector for emitter sampling
+            # For initial intersection: query projector directly with inverse square falloff
+            # For subsequent bounces: importance sample from the Gaussian spots
+            if is_initial_intersection:
+                ds, em_weight = self.confocal_projector.query_direct(
+                    scene, si, camera_origin, camera_ray_direction, active_em
+                )
             else:
-                # Standard emitter sampling (no projector)
-                ds, em_weight = scene.sample_emitter_direction(
-                    si, sampler.next_2d(), True, active_em)
+                ds, em_weight = self.confocal_projector.sample_emitter(
+                    scene, si, camera_origin, camera_ray_direction, sampler, active_em
+                )
 
             active_em &= (ds.pdf != 0.0)
 
-            with dr.resume_grad(when=not primal):
-                if dr.hint(not primal, mode='scalar'):
-                    # Given the detached emitter sample, *recompute* its
-                    # contribution with AD to enable light source optimization
-                    ds.d = dr.replace_grad(ds.d, dr.normalize(ds.p - si.p))
-                    em_val = scene.eval_emitter_direction(si, ds, active_em)
-                    em_weight = dr.replace_grad(em_weight, dr.select(
-                        (ds.pdf != 0), em_val / ds.pdf, 0))
-                    dr.disable_grad(ds.d)
-
-                # Evaluate BSDF * cos(theta) differentiably
-                wo = si.to_local(ds.d)
-                bsdf_value_em, bsdf_pdf_em = bsdf.eval_pdf(
-                    bsdf_ctx, si, wo, active_em)
-                bsdf_value_em = si.to_world_mueller(bsdf_value_em, -wo, si.wi)
-                Lr_dir = β * bsdf_value_em * em_weight
+            # Evaluate BSDF * cos(theta)
+            wo = si.to_local(ds.d)
+            bsdf_value_em, bsdf_pdf_em = bsdf.eval_pdf(
+                bsdf_ctx, si, wo, active_em)
+            bsdf_value_em = si.to_world_mueller(bsdf_value_em, -wo, si.wi)
+            Lr_dir = β * bsdf_value_em * em_weight
 
             if self.use_nlos_only:
-                # Check if current point is directly visible from camera
-                # Cast ray from camera toward current intersection point
-                point_direction = dr.normalize(si.p - camera_origin)
-                visibility_ray_origin = camera_origin
-                visibility_ray = mi.Ray3f(visibility_ray_origin, point_direction)
+                has_hit_nlos_point, Lr_dir, L = self._apply_nlos_filter(
+                    scene, si, camera_origin, has_hit_nlos_point, Lr_dir, L
+                )
 
-                # Check if ray from camera hits the current point without hitting other geometry
-                si_visibility = scene.ray_intersect(visibility_ray, mi.Bool(True))
-
-                # Point is directly visible if the ray hits the current point (within epsilon)
-                # Check that the hit point is very close to si.p
-                epsilon_distance = 1e-4
-                is_directly_visible = si_visibility.is_valid() & (dr.norm(si_visibility.p - si.p) < epsilon_distance)
-
-                # Update tracking: if this point is NOT directly visible, mark that we've hit an NLOS point
-                has_hit_nlos_point |= ~is_directly_visible
-
-                # Zero out contributions if point is directly visible AND we haven't hit an NLOS point yet
-                should_zero_contribution = ~has_hit_nlos_point
-                Lr_dir = dr.select(should_zero_contribution, mi.Spectrum(0.0), Lr_dir)
-                L = dr.select(should_zero_contribution, mi.Spectrum(0.0), L)
-
-            # Add contribution direct emitter sampling
-            if primal:
-                add_transient(Lr_dir, distance + ds.dist *
-                              η, ray.wavelengths, active)
+            # Add contribution from direct emitter sampling with pulse sampling
+            path_distance = distance + ds.dist * η
+            self._add_pulse_samples(sampler, add_transient, Lr_dir, path_distance,
+                                    ray.wavelengths, active)
 
             # ------------------ Detached BSDF sampling -------------------
 
@@ -283,9 +294,8 @@ class TransientPath(TransientADIntegrator):
             bsdf_weight = si.to_world_mueller(
                 bsdf_weight, -bsdf_sample.wo, si.wi)
 
-            # Zero out contributions from directly visible points unless we've already hit an NLOS point
-            # when use_nlos_only is True
-            L = (L + Le + Lr_dir) if primal else (L - Le - Lr_dir)
+            # Accumulate radiance
+            L = L + Le + Lr_dir
 
             # ---- Update loop variables based on current interaction -----
             ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
@@ -293,11 +303,7 @@ class TransientPath(TransientADIntegrator):
             β = β * bsdf_weight
 
             # Information about the current vertex needed by the next iteration
-
             prev_si = dr.detach(si, True)
-            prev_bsdf_pdf = bsdf_sample.pdf
-            prev_bsdf_delta = mi.has_flag(
-                bsdf_sample.sampled_type, mi.BSDFFlags.Delta)
 
             # -------------------- Stopping criterion ---------------------
 
@@ -316,72 +322,13 @@ class TransientPath(TransientADIntegrator):
             rr_continue = sampler.next_1d() < rr_prob
             active_next &= ~rr_active | rr_continue
 
-            # ------------------ Differential phase only ------------------
-
-            if dr.hint(not primal, mode='scalar'):
-                with dr.resume_grad():
-                    # 'L' stores the indirectly reflected radiance at the
-                    # current vertex but does not track parameter derivatives.
-                    # The following addresses this by canceling the detached
-                    # BSDF value and replacing it with an equivalent term that
-                    # has derivative tracking enabled. (nit picking: the
-                    # direct/indirect terminology isn't 100% accurate here,
-                    # since there may be a direct component that is weighted
-                    # via multiple importance sampling)
-
-                    # Recompute 'wo' to propagate derivatives to cosine term
-                    wo = si.to_local(ray.d)
-
-                    # Re-evaluate BSDF * cos(theta) differentiably
-                    bsdf_val = bsdf.eval(bsdf_ctx, si, wo, active_next)
-                    bsdf_val = si.to_world_mueller(bsdf_val, -wo, si.wi)
-
-                    # Detached version of the above term and inverse
-                    bsdf_val_det = bsdf_weight * bsdf_sample.pdf
-                    inv_bsdf_val_det = dr.select(bsdf_val_det != 0,
-                                                 dr.rcp(bsdf_val_det), 0)
-
-                    # Differentiable version of the reflected indirect
-                    # radiance. Minor optional tweak: indicate that the primal
-                    # value of the second term is always 1.
-                    tmp = inv_bsdf_val_det * bsdf_val
-                    tmp_replaced = dr.replace_grad(
-                        dr.ones(mi.Float, dr.width(tmp)), tmp)  # FIXME
-                    Lr_ind = L * tmp_replaced
-
-                    # Differentiable Monte Carlo estimate of all contributions
-                    Lo = Le + Lr_dir + Lr_ind
-
-                    attached_contrib = dr.flag(
-                        dr.JitFlag.VCallRecord) and not dr.grad_enabled(Lo)
-                    if dr.hint(attached_contrib, mode='scalar'):
-                        raise Exception(
-                            "The contribution computed by the differential "
-                            "rendering phase is not attached to the AD graph! "
-                            "Raising an exception since this is usually "
-                            "indicative of a bug (for example, you may have "
-                            "forgotten to call dr.enable_grad(..) on one of "
-                            "the scene parameters, or you may be trying to "
-                            "optimize a parameter that does not generate "
-                            "derivatives in detached PRB.)")
-
-                    # Propagate derivatives from/to 'Lo' based on 'mode'
-                    if dr.hint(mode == dr.ADMode.Backward, mode='scalar'):
-                        δL_read = gather_derivatives_at_distance(δL, distance)
-                        dr.backward_from(δL_read * Lo)
-                    else:
-                        δL_part = dr.forward_to(Lo)
-                        add_transient(δL_part, distance,
-                                      ray.wavelengths, True)
-                        δL += δL_part
-
             depth[si.is_valid()] += 1
             active = active_next
 
         return (
-            L if primal else δL,  # Radiance/differential radiance
+            L,                    # Radiance
             (depth != 0),         # Ray validity flag for alpha blending
-            [],                   # Empty typle of AOVs
+            [],                   # Empty tuple of AOVs
             L                     # State for the differential phase
         )
 

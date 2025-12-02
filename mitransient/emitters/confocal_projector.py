@@ -121,6 +121,23 @@ class ConfocalProjector(mi.Emitter):
         self.fov = props.get("fov", 0.2)
         self.max_rejection_samples = props.get("max_rejection_samples", 8)
 
+        # Temporal pulse configuration (required)
+        pulse_type = props.get("pulse_type", "gaussian")
+        if pulse_type == "gaussian":
+            from mitransient.pulses import GaussianPulse
+            pulse_width = props.get("pulse_width_opl", 0.01)
+            self.pulse = GaussianPulse(pulse_width)
+        elif pulse_type == "histogram":
+            from mitransient.pulses import HistogramPulse
+            pulse_values = props.get("pulse_values", None)
+            pulse_start = props.get("pulse_start_opl", 0.0)
+            pulse_bin_width = props.get("pulse_bin_width_opl", 0.001)
+            if pulse_values is None:
+                raise ValueError("pulse_values must be provided for histogram pulse type")
+            self.pulse = HistogramPulse(pulse_values, pulse_start, pulse_bin_width)
+        else:
+            raise ValueError(f"Unknown pulse_type: {pulse_type}. Use 'gaussian' or 'histogram'.")
+
         # Store frame: extract rotation matrix and translation from Transform4f
         frame = props.get("frame", None)
         if frame is not None:
@@ -551,6 +568,35 @@ class ConfocalProjector(mi.Emitter):
     def eval_direction(self, ref: mi.Interaction3f, ds: mi.DirectionSample3f,
                        active: mi.Bool) -> mi.Spectrum:
         return mi.Spectrum(0.0)
+
+    def eval_pulse(self, shifted_time: mi.Float) -> mi.Float:
+        """
+        Evaluate the temporal pulse at the given shifted time.
+
+        The pulse is centered at t=0, so contributions are largest when
+        shifted_time is close to 0 (i.e., when path length matches target time).
+
+        Args:
+            shifted_time: Time offset (target_time - path_length) in OPL units
+
+        Returns:
+            Pulse amplitude at shifted_time.
+        """
+        return self.pulse.eval(shifted_time)
+
+    def sample_pulse(self, xi: mi.Float) -> Tuple[mi.Float, mi.Float]:
+        """
+        Importance sample a time offset from the pulse distribution.
+
+        Args:
+            xi: Uniform random number in [0, 1]
+
+        Returns:
+            Tuple of (sampled_time_offset, weight) where:
+            - sampled_time_offset: Time offset sampled from pulse distribution
+            - weight: Weight to multiply the sample by (1.0 for normalized pulses)
+        """
+        return self.pulse.sample(xi)
 
     def to_string(self):
         string = f"{type(self).__name__}[\n"
