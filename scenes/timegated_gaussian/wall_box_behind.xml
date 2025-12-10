@@ -36,7 +36,7 @@
             <float name="grid_sigma" value="0.001"/>
             <float name="grid_intensity" value="100.0"/>
             <string name="grid_spacing" value="uniform"/>
-            <float name="fov" value="0.78"/>
+            <float name="fov" value="44.69"/>
             <boolean name="is_confocal" value="true"/>
             <integer name="max_rejection_samples" value="4"/>
             <!-- Pulse configuration on projector -->

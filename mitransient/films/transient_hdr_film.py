@@ -127,7 +127,15 @@ class TransientHDRFilm(mi.Film):
         channels = self.prepare_transient_(aovs)
         return channels
 
-    def create_block(self):
+    def create_block(self, offset=None, size=None, normalize=True):
+        """
+        Create a transient image block.
+
+        Args:
+            offset: Unused, kept for API compatibility with mi.Film
+            size: Unused, kept for API compatibility with mi.Film
+            normalize: Unused, kept for API compatibility with mi.Film
+        """
         return TransientImageBlock(
             size_xyt=self.crop_size_xyt,
             offset_xyt=self.crop_offset_xyt,

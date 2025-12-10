@@ -6,7 +6,25 @@ package-lock.json
 
 .vscode
 scenes/old/test/t-compare-with-mitsuba2/tal_Z/
+
+# Large files in scenes/ (but allow XML files)
 scenes/**/*.npy
+scenes/**/*.npz
+scenes/**/*.vol
+scenes/**/*.exr
+scenes/**/*.png
+scenes/**/*.jpg
+scenes/**/*.jpeg
+scenes/**/*.hdr
+scenes/**/*.tiff
+scenes/**/*.tif
+scenes/**/*.mp4
+scenes/**/*.avi
+scenes/**/*.mov
+scenes/**/*.mkv
+scenes/**/*.ply
+scenes/**/*.obj
+scenes/**/*.stl
 
 docs/generated
 

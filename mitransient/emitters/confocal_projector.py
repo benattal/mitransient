@@ -36,7 +36,7 @@ class ConfocalProjector(mi.Emitter):
                 'grid_cols': 3,
                 'grid_sigma': 0.01,
                 'grid_intensity': 1000.0,
-                'fov': 0.5,
+                'fov': 28.65,  # degrees
                 'is_confocal': True,
             }
 
@@ -48,7 +48,7 @@ class ConfocalProjector(mi.Emitter):
                 'spot_positions': mi.TensorXf([[0, 0], [0.5, 0.5]]),
                 'spot_sigmas': mi.TensorXf([0.01, 0.01]),
                 'spot_intensities': mi.TensorXf([[1000, 1000, 1000], [500, 500, 500]]),
-                'fov': 0.5,
+                'fov': 28.65,  # degrees
                 'is_confocal': False,
                 'frame': projector_frame,
             }
@@ -62,7 +62,7 @@ class ConfocalProjector(mi.Emitter):
 
      * - fov
        - |float|
-       - Field of view in radians for the projector. (default: 0.2)
+       - Field of view in degrees for the projector. (default: 11.46)
 
      * - frame
        - |transform|
@@ -118,7 +118,8 @@ class ConfocalProjector(mi.Emitter):
 
         # Core parameters
         self.is_confocal = props.get("is_confocal", True)
-        self.fov = props.get("fov", 0.2)
+        fov_degrees = props.get("fov", 11.46)  # Default ~11.46 degrees (was 0.2 radians)
+        self.fov = fov_degrees * (dr.pi / 180.0)  # Convert degrees to radians for internal use
         self.max_rejection_samples = props.get("max_rejection_samples", 8)
 
         # Temporal pulse configuration (required)
@@ -546,7 +547,8 @@ class ConfocalProjector(mi.Emitter):
     def traverse(self, callback: mi.TraversalCallback):
         """Expose parameters for traversal (e.g., for optimization)."""
         super().traverse(callback)
-        callback.put("fov", self.fov, mi.ParamFlags.NonDifferentiable)
+        # Store FOV internally in radians, but expose in degrees for consistency
+        callback.put("fov", self.fov * (180.0 / dr.pi), mi.ParamFlags.NonDifferentiable)
         callback.put("is_confocal", self.is_confocal, mi.ParamFlags.NonDifferentiable)
 
     def eval(self, si: mi.SurfaceInteraction3f, active: mi.Bool) -> mi.Spectrum:
@@ -601,7 +603,7 @@ class ConfocalProjector(mi.Emitter):
     def to_string(self):
         string = f"{type(self).__name__}[\n"
         string += f"  is_confocal = {self.is_confocal},\n"
-        string += f"  fov = {self.fov},\n"
+        string += f"  fov = {self.fov * (180.0 / dr.pi):.2f} degrees,\n"
         string += f"  num_spots = {self.num_spots},\n"
         string += f"  max_rejection_samples = {self.max_rejection_samples},\n"
         if self.origin is not None:
