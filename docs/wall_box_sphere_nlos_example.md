@@ -46,13 +46,13 @@ The low `--clip-max` is needed because NLOS scenes have very low radiance values
 Files are saved to `results/`:
 - `wall_box_sphere_nlos_steady.exr` - Steady-state HDR image
 - `wall_box_sphere_nlos_steady.png` - Steady-state tonemapped image
-- `wall_box_sphere_nlos_transient.mp4` - Transient video
-- `wall_box_sphere_nlos_transient.npy` - Raw transient data for reconstruction
+- `wall_box_sphere_nlos.mp4` - Transient video
+- `wall_box_sphere_nlos.npy` - Raw transient data for reconstruction
 
 ## Step 2: Run Backprojection
 
 ```bash
-python direct_backprojection.py results/wall_box_sphere_nlos_transient.npy \
+python direct_backprojection.py results/wall_box_sphere_nlos.npy \
     --scene-file scenes/wall_box_sphere_nlos.xml \
     --voxel-resolution 128 \
     --volume-min -1 -1 -0.9 \
@@ -97,7 +97,7 @@ Files are saved to `vis/`:
 python render_transient.py scenes/wall_box_sphere_nlos.xml --clip-max 0.001
 
 # Step 2: Reconstruct
-python direct_backprojection.py results/wall_box_sphere_nlos_transient.npy \
+python direct_backprojection.py results/wall_box_sphere_nlos.npy \
     --scene-file scenes/wall_box_sphere_nlos.xml \
     --voxel-resolution 128 \
     --volume-min -1 -1 -0.9 \
@@ -148,7 +148,7 @@ python render_transient.py scenes/wall_box_nlos.xml --clip-max 0.001
 ### Run Backprojection
 
 ```bash
-python direct_backprojection.py results/wall_box_nlos_transient.npy \
+python direct_backprojection.py results/wall_box_nlos.npy \
     --scene-file scenes/wall_box_nlos.xml \
     --voxel-resolution 128 \
     --volume-min -1 -1 -0.9 \
