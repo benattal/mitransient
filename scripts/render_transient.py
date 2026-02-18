@@ -3,25 +3,31 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import mitsuba as mi
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Set Mitsuba variant
 mi.set_variant('cuda_ad_rgb')
+print("Mitsuba current variant:", mi.variant())
+
 
 import drjit as dr
 import mitransient as mitr
 # Import the confocal projector emitter to register the plugin
 from mitransient.emitters.confocal_projector import ConfocalProjector
+from mitransient.bsdfs.retroreflector import Retroreflector
+
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Render transient scene from XML file')
 parser.add_argument('scene_file', type=str,
                     help='Path to the XML scene file')
 parser.add_argument('--spp', type=int, default=100000,
-                    help='Samples per pixel (default: 100000)')
+                    help='Samples per pixel (default: 1000000)')
 parser.add_argument('--clip-max', type=float, default=10.0,
                     help='Maximum clipping value for tonemapping (default: 10.0)')
 parser.add_argument('--output-dir', type=str, default=None,
-                    help='Output directory (default: results/)')
+                    help='Output directory for rendered data and images (default: derived from base-output-dir/output-name/)')
 parser.add_argument('--output-name', type=str, default=None,
                     help='Output filename prefix (default: derived from scene file)')
 parser.add_argument('--plot-pixel-x', type=int, default=None,
@@ -43,6 +49,7 @@ print(f"Using Mitransient version: {mitr.__version__}")
 scene_path = os.path.abspath(args.scene_file)
 if not os.path.exists(scene_path):
     raise FileNotFoundError(f"Scene file not found: {scene_path}")
+
 
 print(f"Loading scene from: {scene_path}")
 scene = mi.load_file(scene_path)
@@ -81,8 +88,12 @@ else:
     # Derive from scene filename (without extension)
     output_name = os.path.splitext(os.path.basename(scene_path))[0]
 
-# Create output directory: results/{output_name}/ by default
-base_output_dir = args.output_dir if args.output_dir else os.path.join(os.path.dirname(__file__), '../renders')
+# Decide base output directory\
+if args.output_dir is not None:
+    base_output_dir = args.output_dir
+else:
+    base_output_dir = os.path.join(os.path.dirname(__file__), '../renders_fwp')
+
 output_dir = os.path.join(base_output_dir, output_name)
 os.makedirs(output_dir, exist_ok=True)
 
@@ -97,7 +108,7 @@ print(f"Steady-state image saved to: {output_steady_png_path}")
 
 # Tonemap and save transient video
 data_transient_clipped = dr.clip(data_transient, 0.0, args.clip_max)
-data_transient_tonemapped = mitr.vis.tonemap_transient(data_transient_clipped)
+data_transient_tonemapped = mitr.vis.tonemap_transient(data_transient)
 
 output_video_path = os.path.join(output_dir, 'transient.mp4')
 mitr.vis.save_video(
@@ -144,27 +155,28 @@ if not args.no_plot:
 
     # Plot
     fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(pixel_transient[:,0])
 
-    # If RGB, plot each channel and total intensity
-    if pixel_transient.shape[1] >= 3:
-        ax.plot(time_axis, pixel_transient[:, 0], 'r-', alpha=0.7, label='R')
-        ax.plot(time_axis, pixel_transient[:, 1], 'g-', alpha=0.7, label='G')
-        ax.plot(time_axis, pixel_transient[:, 2], 'b-', alpha=0.7, label='B')
-        # Plot luminance
-        luminance = 0.2126 * pixel_transient[:, 0] + 0.7152 * pixel_transient[:, 1] + 0.0722 * pixel_transient[:, 2]
-        ax.plot(time_axis, luminance, 'k-', linewidth=2, label='Luminance')
-    else:
-        ax.plot(time_axis, pixel_transient[:, 0], 'k-', linewidth=2)
+    # # If RGB, plot each channel and total intensity
+    # if pixel_transient.shape[1] >= 3:
+    #     ax.plot(time_axis, pixel_transient[:, 0], 'r-', alpha=0.7, label='R')
+    #     ax.plot(time_axis, pixel_transient[:, 1], 'g-', alpha=0.7, label='G')
+    #     ax.plot(time_axis, pixel_transient[:, 2], 'b-', alpha=0.7, label='B')
+    #     # Plot luminance
+    #     luminance = 0.2126 * pixel_transient[:, 0] + 0.7152 * pixel_transient[:, 1] + 0.0722 * pixel_transient[:, 2]
+    #     ax.plot(time_axis, luminance, 'k-', linewidth=2, label='Luminance')
+    # else:
+    #     ax.plot(time_axis, pixel_transient[:, 0], 'k-', linewidth=2)
 
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel('Radiance')
-    ax.set_title(f'Transient at pixel ({pixel_x}, {pixel_y})')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    # ax.set_xlabel(xlabel)
+    # ax.set_ylabel('Radiance')
+    # ax.set_title(f'Transient at pixel ({pixel_x}, {pixel_y})')
+    # ax.legend()
+    # ax.grid(True, alpha=0.3)
 
-    if args.log_scale:
-        ax.set_yscale('log')
-        ax.set_ylabel('Radiance (log scale)')
+    # if args.log_scale:
+    #     ax.set_yscale('log')
+    #     ax.set_ylabel('Radiance (log scale)')
 
     # Save plot
     output_plot_path = os.path.join(output_dir, f'transient_pixel_{pixel_x}_{pixel_y}.png')

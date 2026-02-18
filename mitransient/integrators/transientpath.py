@@ -1,11 +1,16 @@
 from __future__ import annotations  # Delayed parsing of type annotations
-from typing import Optional, Tuple, List, Callable, Any
+from typing import Optional, Tuple, List, Callable, Any, Union, Sequence
 
 import drjit as dr
 import mitsuba as mi
 
+import numpy as np
 from .common import TransientADIntegrator
-
+from mitsuba import Log, LogLevel
+from mitsuba.ad.integrators.common import ADIntegrator  # type: ignore
+from ..films.transient_hdr_film import TransientHDRFilm
+from ..utils import β_init
+from ..version import Version
 
 class TransientPath(TransientADIntegrator):
     r"""
@@ -89,7 +94,11 @@ class TransientPath(TransientADIntegrator):
         super().__init__(props)
         self.confocal_projector = props.get("confocal_projector", None)
         self.use_nlos_only = props.get("use_nlos_only", True)
+        self.wall_sample = props.get("wall_sample", False)
         self.pulse_samples = props.get("pulse_samples", 1)
+        self.wall_name = props.get("wall_name", "elm__4")
+        self.wall_id = -1
+        self.saved = False
 
     def _apply_nlos_filter(self,
                            scene: mi.Scene,
@@ -164,6 +173,175 @@ class TransientPath(TransientADIntegrator):
 
             add_transient(Lr_dir * sample_weight, path_distance + pulse_time_offset,
                           wavelengths, active)
+    def get_wall_id(self, scene):
+        """Helper to find the integer index of the wall shape by name"""
+        shapes = scene.shapes()
+        for i, shape in enumerate(shapes):
+            if shape.id() == self.wall_name:
+                return i
+        raise Exception(f"Could not find shape with name '{self.wall_name}' in the scene.")
+
+
+    def sample_wall_rays(self, scene, sensor, sampler, wall_id):
+        """
+        Samples rays from a regular grid on the wall corresponding to the sensor resolution.
+        Maps sensor pixel (x,y) -> Wall UV (u,v).
+        """
+        # 1. Call standard camera sampling first
+        # We need this to get the 'film_pos' (pixel coordinate) and valid wavelengths.
+        camera_ray, _, film_pos = self.sample_rays(scene, sensor, sampler)
+        # 2. Steal valid properties
+        wavelengths = camera_ray.wavelengths
+        time = camera_ray.time
+        
+        # 3. Map Film Position to UV
+        # film_pos is in [0, width], [0, height]
+        # We want UV in [0, 1], [0, 1]
+        film = sensor.film()
+        film_size = film.crop_size()
+       
+        
+        # Avoid sampling u = 0 or v = 0 by shifting by 0.5 pixels and dividing by total pixels
+        # u = (film_pos.x + 0.5) / film_size.x
+        # v = (film_pos.y + 0.5) / film_size.y
+        u = (film_pos.y + 0.5) / film_size.y
+        v = 1.0 - (film_pos.x + 0.5) / film_size.x
+        
+        uv_coord = mi.Point2f(u, v)
+
+        # 4. Evaluate the shape at this exact UV
+        # This function takes a Point2f (uv) and returns a SurfaceInteraction (p, n, etc.)
+        shape = scene.shapes()[wall_id]
+
+
+        si = shape.eval_parameterization(uv_coord)
+        sinn = np.array(si.n).transpose(1, 0)[::1023]
+        sinp = np.array(si.p).transpose(1, 0)[::1023]
+        if sinn.shape[0] == film.size()[0]*film.size()[1] and not self.saved:
+            print('YO')
+            self.saved = True
+            np.save("wallsinp.npy", sinp)
+            np.save("wallsinn.npy", sinn)
+        
+        # 5. Handle invalid UVs (if mesh doesn't cover [0,1])
+        valid_uv = si.is_valid()
+
+        # 6. Construct the Ray
+        # Origin: The point on the wall corresponding to that pixel
+        # Offset slightly along normal to avoid self-intersection (acne)
+        # ray_origin = si.p + si.n * 1e-4
+
+        ray_origin = camera_ray.o
+        ray_direction = dr.normalize(si.p - ray_origin)
+        ray = mi.Ray3f(ray_origin, ray_direction, time, wavelengths)
+
+        # 7. Set Weight
+        # Since we map 1 pixel = 1 UV unit area, we treat weight as 1.0.
+        # Mask out invalid UVs by setting weight to 0.
+        weight = dr.select(valid_uv, mi.Float(1.0), mi.Float(0.0))
+
+        # Return film_pos so the result is splatted to the correct pixel
+        return ray, weight, film_pos
+    def render(self: mi.SamplingIntegrator,
+               scene: mi.Scene,
+               sensor: Union[int, mi.Sensor] = 0,
+               seed: mi.UInt32 = 0,
+               spp: int = 0,
+               develop: bool = True,
+               evaluate: bool = True,
+               progress_callback: function = None) -> Tuple[mi.TensorXf, mi.TensorXf]:
+        if not develop:
+            raise Exception("develop=True must be specified when "
+                            "invoking AD integrators")
+
+        if isinstance(sensor, int):
+            sensor = scene.sensors()[sensor]
+        film = sensor.film()
+
+        self.check_transient_(scene, sensor)
+
+        # Pass temporal filter parameters to the film
+        if isinstance(film, TransientHDRFilm):
+            film.temporal_filter = self.temporal_filter
+            film.gaussian_stddev = self.gaussian_stddev
+
+        # Disable derivatives in all of the following
+        with dr.suspend_grad():
+            # Prepare the film and sample generator for rendering
+            samplers_spps = self.prepare(
+                scene=scene,
+                sensor=sensor,
+                seed=seed,
+                spp=spp,
+                aovs=self.aov_names()
+            )
+
+            # need to re-add in case the spp parameter was set to 0
+            # (spp was set through the xml file)
+            total_spp = 0
+            for _, spp_i in samplers_spps:
+                total_spp += spp_i
+            if self.wall_sample:
+                self.wall_id = self.get_wall_id(scene)
+            for i, (sampler_i, spp_i) in enumerate(samplers_spps):
+                # Generate a set of rays starting at the sensor
+                if self.wall_sample:
+                    ray, weight, pos = self.sample_wall_rays(scene, sensor, sampler_i, self.wall_id)
+                else:
+                    ray, weight, pos = self.sample_rays(scene, sensor, sampler_i)
+
+                # Launch the Monte Carlo sampling process in primal mode
+                L, valid, aovs, _ = self.sample(
+                    mode=dr.ADMode.Primal,
+                    scene=scene,
+                    sampler=sampler_i,
+                    ray=ray,
+                    depth=mi.UInt32(0),
+                    β=β_init(sensor, ray),
+                    δL=None,
+                    δaovs=None,
+                    state_in=None,
+                    active=mi.Bool(True),
+                    add_transient=self.add_transient_f(
+                        film=film, pos=pos, ray_weight=weight, sample_scale=1.0 / total_spp
+                    )
+                )
+
+                # Prepare an ImageBlock as specified by the film
+                block = film.steady.create_block()
+
+                # Only use the coalescing feature when rendering enough samples
+                block.set_coalesce(block.coalesce() and spp_i >= 4)
+
+                # NOTE(diego): Mitsuba 3.6.X needs extra care when dealing
+                # with polarized functions, so we'll our version instead
+                splat_function = (
+                    ADIntegrator._splat_to_block
+                    if Version(mi.__version__) >= Version('3.7.0')
+                    else self._splat_to_block
+                )
+                # Accumulate into the image block
+                splat_function(
+                    block, film, pos,
+                    value=L * mi.Spectrum(weight),
+                    weight=1.0,
+                    alpha=dr.select(valid, mi.Float(1), mi.Float(0)),
+                    aovs=aovs,
+                    wavelengths=ray.wavelengths
+                )
+
+                # Explicitly delete any remaining unused variables
+                del sampler_i, ray, weight, pos, L, valid
+
+                # Perform the weight division and return an image tensor
+                film.steady.put_block(block)
+
+                # Report progress
+                if progress_callback:
+                    progress_callback((i + 1) / len(samplers_spps))
+
+            steady_image, transient_image = film.develop()
+            return steady_image, transient_image
 
     @dr.syntax
     def sample(self,
