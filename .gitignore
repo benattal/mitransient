@@ -26,6 +26,8 @@ scenes/**/*.ply
 scenes/**/*.obj
 scenes/**/*.stl
 
+renders_backprojection
+scenes_mittransient
 docs/generated
 
 
