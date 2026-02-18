@@ -218,7 +218,7 @@ class TransientPath(TransientADIntegrator):
         sinn = np.array(si.n).transpose(1, 0)[::1023]
         sinp = np.array(si.p).transpose(1, 0)[::1023]
         if sinn.shape[0] == film.size()[0]*film.size()[1] and not self.saved:
-            print('YO')
+            print('Wall Sampling')
             self.saved = True
             np.save("wallsinp.npy", sinp)
             np.save("wallsinn.npy", sinn)
