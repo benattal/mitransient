@@ -109,6 +109,8 @@ print(f"Steady-state image saved to: {output_steady_png_path}")
 # Tonemap and save transient video
 data_transient_clipped = dr.clip(data_transient, 0.0, args.clip_max)
 data_transient_tonemapped = mitr.vis.tonemap_transient(data_transient)
+data_transient_tonemapped = np.clip(np.array(data_transient_tonemapped), 0.0, 1.0)
+
 
 output_video_path = os.path.join(output_dir, 'transient.mp4')
 mitr.vis.save_video(

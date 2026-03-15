@@ -82,6 +82,14 @@ class TransientPath(TransientADIntegrator):
          reaching the camera. This ensures that we only directly illuminate
          the NLOS scene and exclude direct line-of-sight paths. (default: false)
 
+     * - filter_direct
+       - |bool|
+       - If True, suppresses only the direct line-of-sight component from the
+         camera's initial visible intersection while preserving indirect paths.
+         This is useful when you want to remove the direct relay-wall peak
+         without requiring every kept path to hit an occluded point.
+         (default: false)
+
      * - pulse_samples
        - |int|
        - Number of samples to take from the pulse distribution per path vertex.
@@ -94,11 +102,27 @@ class TransientPath(TransientADIntegrator):
         super().__init__(props)
         self.confocal_projector = props.get("confocal_projector", None)
         self.use_nlos_only = props.get("use_nlos_only", True)
+        self.filter_direct = props.get("filter_direct", False)
         self.wall_sample = props.get("wall_sample", False)
         self.pulse_samples = props.get("pulse_samples", 1)
         self.wall_name = props.get("wall_name", "elm__4")
         self.wall_id = -1
         self.saved = False
+
+    def _is_directly_visible(self,
+                             scene: mi.Scene,
+                             si: mi.SurfaceInteraction3f,
+                             camera_origin: mi.Point3f) -> mi.Bool:
+        """
+        Check whether the current surface point is directly visible from the camera.
+        """
+        point_direction = dr.normalize(si.p - camera_origin)
+        visibility_ray = mi.Ray3f(camera_origin, point_direction)
+        si_visibility = scene.ray_intersect(visibility_ray, mi.Bool(True))
+
+        epsilon_distance = 1e-4
+        return si_visibility.is_valid() & (dr.norm(si_visibility.p - si.p) < epsilon_distance)
+        # return ~scene.ray_test(si.spawn_ray_to(camera_origin), mi.Bool(True))
 
     def _apply_nlos_filter(self,
                            scene: mi.Scene,
@@ -121,16 +145,7 @@ class TransientPath(TransientADIntegrator):
         Returns:
             Tuple of (updated_has_hit_nlos_point, filtered_Lr_dir, filtered_L)
         """
-        # Check if current point is directly visible from camera
-        point_direction = dr.normalize(si.p - camera_origin)
-        visibility_ray = mi.Ray3f(camera_origin, point_direction)
-
-        # Check if ray from camera hits the current point without hitting other geometry
-        si_visibility = scene.ray_intersect(visibility_ray, mi.Bool(True))
-
-        # Point is directly visible if the ray hits the current point (within epsilon)
-        epsilon_distance = 1e-4
-        is_directly_visible = si_visibility.is_valid() & (dr.norm(si_visibility.p - si.p) < epsilon_distance)
+        is_directly_visible = self._is_directly_visible(scene, si, camera_origin)
 
         # Update tracking: if this point is NOT directly visible, mark that we've hit an NLOS point
         has_hit_nlos_point = has_hit_nlos_point | ~is_directly_visible
@@ -217,10 +232,12 @@ class TransientPath(TransientADIntegrator):
         si = shape.eval_parameterization(uv_coord)
         sinn = np.array(si.n).transpose(1, 0)[::1023]
         sinp = np.array(si.p).transpose(1, 0)[::1023]
-        if sinn.shape[0] == film.size()[0]*film.size()[1] and not self.saved:
+        if sinp.shape[0] == film.size()[0]*film.size()[1] and not self.saved:
             print('Wall Sampling')
             self.saved = True
             np.save("wallsinp.npy", sinp)
+            if sinn.shape != sinp.shape:
+                sinn = sinn.repeat(sinp.shape[0], axis = 0)
             np.save("wallsinn.npy", sinn)
         
         # 5. Handle invalid UVs (if mesh doesn't cover [0,1])
@@ -452,6 +469,11 @@ class TransientPath(TransientADIntegrator):
                 bsdf_ctx, si, wo, active_em)
             bsdf_value_em = si.to_world_mueller(bsdf_value_em, -wo, si.wi)
             Lr_dir = β * bsdf_value_em * em_weight
+
+            if self.filter_direct and is_initial_intersection:
+                is_directly_visible = self._is_directly_visible(scene, si, camera_origin)
+                Lr_dir = dr.select(is_directly_visible, mi.Spectrum(0.0), Lr_dir)
+                L = dr.select(is_directly_visible, mi.Spectrum(0.0), L)
 
             if self.use_nlos_only:
                 has_hit_nlos_point, Lr_dir, L = self._apply_nlos_filter(
