@@ -23,11 +23,82 @@ class TransientADIntegrator(ADIntegrator):
         super().__init__(props)  # initialize props: max_depth and rr_depth
 
         self.camera_unwarp = props.get("camera_unwarp", False)
+        self.pixel_filter = props.get("pixel_filter", "box")
         # FIXME document this and add to other integrators maybe
         self.discard_direct_light = props.get("discard_direct_light", False)
         # Store temporal filter parameters for pulse shape convolution
         self.temporal_filter = props.get("temporal_filter", "box")
         self.gaussian_stddev = props.get("gaussian_stddev", 0.5)
+
+    def sample_rays(
+        self,
+        scene: mi.Scene,
+        sensor: mi.Sensor,
+        sampler: mi.Sampler,
+    ):
+        """
+        Sample primary rays for a sensor, optionally forcing point sampling at
+        pixel centers when ``pixel_filter=delta``.
+        """
+        film = sensor.film()
+        film_size = film.crop_size()
+        rfilter = film.rfilter()
+        border_size = rfilter.border_size()
+
+        if film.sample_border():
+            film_size += 2 * border_size
+
+        spp = sampler.sample_count()
+
+        idx = dr.arange(mi.UInt32, dr.prod(film_size) * spp)
+
+        log_spp = dr.log2i(spp)
+        if 1 << log_spp == spp:
+            idx >>= dr.opaque(mi.UInt32, log_spp)
+        else:
+            idx //= dr.opaque(mi.UInt32, spp)
+
+        pos = mi.Vector2i()
+        pos.y = idx // film_size[0]
+        pos.x = dr.fma(mi.UInt32(mi.Int32(-film_size[0])), pos.y, idx)
+
+        if film.sample_border():
+            pos -= border_size
+
+        pos += mi.Vector2i(film.crop_offset())
+
+        if self.pixel_filter == "delta":
+            pos_f = mi.Vector2f(pos) + 0.5
+            splatting_pos = mi.Vector2f(pos)
+        else:
+            pos_f = mi.Vector2f(pos) + sampler.next_2d()
+            splatting_pos = mi.Vector2f(pos) if rfilter.is_box_filter() else pos_f
+
+        scale = dr.rcp(mi.ScalarVector2f(film.crop_size()))
+        offset = -mi.ScalarVector2f(film.crop_offset()) * scale
+        pos_adjusted = dr.fma(pos_f, scale, offset)
+
+        aperture_sample = mi.Vector2f(0.0)
+        if sensor.needs_aperture_sample():
+            aperture_sample = sampler.next_2d()
+
+        time = sensor.shutter_open()
+        if sensor.shutter_open_time() > 0:
+            time += sampler.next_1d() * sensor.shutter_open_time()
+
+        wavelength_sample = 0
+        if mi.is_spectral:
+            wavelength_sample = sampler.next_1d()
+
+        with dr.resume_grad():
+            ray, weight = sensor.sample_ray_differential(
+                time=time,
+                sample1=wavelength_sample,
+                sample2=pos_adjusted,
+                sample3=aperture_sample
+            )
+
+        return ray, weight, splatting_pos
 
     def prepare(self, scene, sensor, seed, spp, aovs):
         film = sensor.film()
