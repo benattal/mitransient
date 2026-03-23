@@ -43,21 +43,28 @@ def tonemap_grad_transient(transient, axis_video=2):
 
 def save_video(path, transient, axis_video=2, fps=24, display_video=False):
     """Saves the transient image in video format (.mp4)."""
-    import cv2
-
     def generate_index(axis_video, dims, index):
         return tuple([np.s_[:] if dim != axis_video else np.s_[index] for dim in range(dims)])
 
     size = (transient.shape[1], transient.shape[0])
-    out = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
-
+    frames = []
     for i in range(transient.shape[axis_video]):
         frame = transient[generate_index(axis_video, len(transient.shape), i)]
         bitmap = mi.Bitmap(frame).convert(
             component_format=mi.Struct.Type.UInt8, srgb_gamma=True)
-        out.write(np.array(bitmap)[:, :, ::-1])
+        frames.append(np.array(bitmap))
 
-    out.release()
+    try:
+        import cv2
+
+        out = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+        for frame in frames:
+            out.write(frame[:, :, ::-1])
+        out.release()
+    except ModuleNotFoundError:
+        import imageio.v2 as imageio
+
+        imageio.mimwrite(path, frames, fps=fps)
 
     if display_video:
         from IPython.display import Video, display
