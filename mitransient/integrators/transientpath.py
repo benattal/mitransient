@@ -106,6 +106,8 @@ class TransientPath(TransientADIntegrator):
         self.pulse_samples = props.get("pulse_samples", 1)
         self.wall_name = props.get("wall_name", "elm__4")
         self.wall_id = -1
+        self.hidden_shape_name = props.get("hidden_shape_name", "")
+        self.hidden_shape = None
 
     def _is_directly_visible(self,
                              scene: mi.Scene,
@@ -287,6 +289,17 @@ class TransientPath(TransientADIntegrator):
                 total_spp += spp_i
             if self.wall_sample:
                 self.wall_id = self.get_wall_id(scene)
+            if self.hidden_shape_name:
+                matches = [
+                    shape for shape in scene.shapes()
+                    if shape.id() == self.hidden_shape_name
+                ]
+                if len(matches) != 1:
+                    raise RuntimeError(
+                        "hidden_shape_name must identify exactly one scene shape; "
+                        f"got {len(matches)} matches for {self.hidden_shape_name!r}"
+                    )
+                self.hidden_shape = matches[0]
             for i, (sampler_i, spp_i) in enumerate(samplers_spps):
                 # Generate a set of rays starting at the sensor
                 if self.wall_sample:
@@ -432,6 +445,11 @@ class TransientPath(TransientADIntegrator):
             # Is emitter sampling even possible on the current vertex?
             active_em = active_next & mi.has_flag(
                 bsdf.flags(), mi.BSDFFlags.Smooth)
+            if dr.hint(self.hidden_shape is not None, mode="scalar"):
+                # Keep only camera -> relay -> named-hidden-object ->
+                # relay/projector paths. A folded relay can otherwise be hit
+                # again at depth one and contaminate an NLOS validation capture.
+                active_em &= (depth != 1) | (si.shape == self.hidden_shape)
 
             # Check if this is the initial intersection point (depth == 0)
             is_initial_intersection = (depth == 0)
