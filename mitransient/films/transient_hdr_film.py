@@ -146,11 +146,15 @@ class TransientHDRFilm(mi.Film):
     def gather_derivatives_at_distance(self, pos, δL, distance: mi.Float):
         pos_distance = (distance - self.start_opl) / self.bin_width_opl
         coords = mi.Vector3f(pos.x, pos.y, pos_distance)
-        indices = dr.fma(coords.x, self.size().y * self.temporal_bins,
-                         dr.fma(coords.y, self.temporal_bins, coords.z))
+        x = coords.x - self.crop_offset().x
+        y = coords.y - self.crop_offset().y
+        indices = dr.fma(y, self.crop_size().x * self.temporal_bins,
+                         dr.fma(x, self.temporal_bins, coords.z))
         alpha = mi.has_flag(self.flags(), mi.FilmFlags.Alpha)
         color_channels = len(self.channels) - (2 if alpha else 1)
-        active_g = (indices > 0) & (
+        active_g = (x >= 0) & (x < self.crop_size().x) \
+            & (y >= 0) & (y < self.crop_size().y) \
+            & (coords.z >= 0) & (indices >= 0) & (
             indices < dr.prod(δL.shape) // color_channels)
         result = dr.gather(mi.Spectrum, δL, indices, active=active_g)
         return result
@@ -177,7 +181,7 @@ class TransientHDRFilm(mi.Film):
         self.crop_offset_xyt = mi.ScalarPoint3i(
             self.crop_offset().x, self.crop_offset().y, 0)
         self.crop_size_xyt = mi.ScalarVector3u(
-            self.size().x, self.size().y, self.temporal_bins)
+            self.crop_size().x, self.crop_size().y, self.temporal_bins)
 
         self.transient_storage = self.create_block()
         if len(set(channels)) != len(channels):
@@ -187,10 +191,13 @@ class TransientHDRFilm(mi.Film):
         return len(self.channels)
 
     def clear(self):
-        self.steady.clear()
+        steady = getattr(self, "steady", None)
+        if steady is not None:
+            steady.clear()
 
-        if self.transient_storage:
-            self.transient_storage.clear()
+        transient_storage = getattr(self, "transient_storage", None)
+        if transient_storage is not None:
+            transient_storage.clear()
 
     def develop(self, raw: bool = False):
         steady_image = self.steady.develop(raw=raw)
@@ -249,7 +256,10 @@ class TransientHDRFilm(mi.Film):
 
         # Create kernel based on filter type
         # Kernel size should be large enough to capture the filter
-        kernel_size = min(2 * int(np.round(self.gaussian_stddev)) + 1, self.temporal_bins)
+        kernel_size = min(2 * int(np.ceil(3.0 * self.gaussian_stddev)) + 1,
+                          self.temporal_bins)
+        if kernel_size % 2 == 0:
+            kernel_size = max(1, kernel_size - 1)
         kernel = self._create_pulse_kernel(self.temporal_filter, self.gaussian_stddev, kernel_size)
 
         # Vectorized convolution along temporal dimension

@@ -46,7 +46,8 @@ class HistogramPulse(PulseShape):
         # Normalize the pulse so that the integral equals 1
         # Integral ≈ sum(values) * bin_width_opl (treating each bin as a rectangle)
         total_integral = np.sum(values) * bin_width_opl
-        if total_integral > 0:
+        self.has_energy = bool(total_integral > 0)
+        if self.has_energy:
             values = values / total_integral
 
         # Store normalized values as DrJit array
@@ -55,7 +56,8 @@ class HistogramPulse(PulseShape):
         # Build CDF for importance sampling (based on bin values)
         pmf = values * bin_width_opl  # Each bin's probability mass
         cdf = np.cumsum(pmf)
-        cdf = cdf / cdf[-1] if cdf[-1] > 0 else np.linspace(0, 1, len(cdf))
+        if self.has_energy:
+            cdf = cdf / cdf[-1]
         self.cdf = mi.Float(cdf)
 
     def eval(self, t: mi.Float) -> mi.Float:
@@ -106,6 +108,13 @@ class HistogramPulse(PulseShape):
         Returns:
             Tuple of (sampled_time, weight) where weight=1.0 for normalized histogram
         """
+        if not self.has_energy:
+            width = dr.width(xi)
+            return (
+                dr.full(mi.Float, self.start_opl, width),
+                dr.zeros(mi.Float, width),
+            )
+
         # Binary search in CDF to find bin
         bin_idx = dr.clip(
             dr.binary_search(0, self.num_bins - 1,

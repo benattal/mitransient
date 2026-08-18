@@ -89,7 +89,7 @@ class TransientImageBlock(mi.Object):
     def put_(self, pos: mi.Point3f, values: Sequence[mi.Float], active: bool = True):
         # Check if all sample values are valid
         if self.warn_negative or self.warn_invalid:
-            is_valid = True
+            is_valid = mi.Bool(True)
 
             if self.warn_negative:
                 for k in range(self.channel_count):
@@ -99,14 +99,8 @@ class TransientImageBlock(mi.Object):
                 for k in range(self.channel_count):
                     is_valid &= dr.isfinite(values[k])
 
-            if dr.any(active and not is_valid):
-                log_str = "Invalid sample value: ["
-                for k in range(self.channel_count):
-                    log_str += values[k]
-                    if k + 1 < self.channel_count:
-                        log_str += ", "
-                log_str += "]"
-                mi.Log(mi.LogLevel.Warn, log_str)
+            if dr.any(active & ~is_valid):
+                mi.Log(mi.LogLevel.Warn, "Invalid sample value detected.")
 
         # ====================================
         # Fast special case for the box filter
@@ -130,9 +124,6 @@ class TransientImageBlock(mi.Object):
         string += f"  size_xyt = {self.size_xyt}, \n"
         string += f"  channel_count = {self.channel_count}, \n"
         string += f"  border_size = {self.border_size}, \n"
-        string += f"  normalize = {self.normalize}, \n"
-        string += f"  coalesce = {self.coalesce}, \n"
-        string += f"  compensate = {self.compensate}, \n"
         string += f"  warn_negative = {self.warn_negative}, \n"
         string += f"  warn_invalid = {self.warn_invalid}, \n"
         if self.rfilter:

@@ -4,7 +4,6 @@ from typing import Optional, Tuple, List, Callable, Any, Union, Sequence
 import drjit as dr
 import mitsuba as mi
 
-import numpy as np
 from .common import TransientADIntegrator
 from mitsuba import Log, LogLevel
 from mitsuba.ad.integrators.common import ADIntegrator  # type: ignore
@@ -101,13 +100,12 @@ class TransientPath(TransientADIntegrator):
     def __init__(self, props: mi.Properties):
         super().__init__(props)
         self.confocal_projector = props.get("confocal_projector", None)
-        self.use_nlos_only = props.get("use_nlos_only", True)
+        self.use_nlos_only = props.get("use_nlos_only", False)
         self.filter_direct = props.get("filter_direct", False)
         self.wall_sample = props.get("wall_sample", False)
         self.pulse_samples = props.get("pulse_samples", 1)
         self.wall_name = props.get("wall_name", "elm__4")
         self.wall_id = -1
-        self.saved = False
 
     def _is_directly_visible(self,
                              scene: mi.Scene,
@@ -197,6 +195,17 @@ class TransientPath(TransientADIntegrator):
         raise Exception(f"Could not find shape with name '{self.wall_name}' in the scene.")
 
 
+    @staticmethod
+    def _wall_uv_from_film_pos(film_pos, film):
+        """Map every jittered film sample to its pixel-center wall UV."""
+        crop_offset = mi.Point2f(film.crop_offset())
+        pixel_center = dr.floor(film_pos - crop_offset) + 0.5
+        film_size = film.crop_size()
+        return mi.Point2f(
+            pixel_center.y / film_size.y,
+            1.0 - pixel_center.x / film_size.x,
+        )
+
     def sample_wall_rays(self, scene, sensor, sampler, wall_id):
         """
         Samples rays from a regular grid on the wall corresponding to the sensor resolution.
@@ -209,36 +218,14 @@ class TransientPath(TransientADIntegrator):
         wavelengths = camera_ray.wavelengths
         time = camera_ray.time
         
-        # 3. Map Film Position to UV
-        # film_pos is in [0, width], [0, height]
-        # We want UV in [0, 1], [0, 1]
+        # 3. Map all subpixel samples for a pixel to the same pixel-center UV.
         film = sensor.film()
-        film_size = film.crop_size()
-       
-        
-        # Avoid sampling u = 0 or v = 0 by shifting by 0.5 pixels and dividing by total pixels
-        # u = (film_pos.x + 0.5) / film_size.x
-        # v = (film_pos.y + 0.5) / film_size.y
-        u = (film_pos.y + 0.5) / film_size.y
-        v = 1.0 - (film_pos.x + 0.5) / film_size.x
-        
-        uv_coord = mi.Point2f(u, v)
+        uv_coord = self._wall_uv_from_film_pos(film_pos, film)
 
         # 4. Evaluate the shape at this exact UV
         # This function takes a Point2f (uv) and returns a SurfaceInteraction (p, n, etc.)
         shape = scene.shapes()[wall_id]
-
-
         si = shape.eval_parameterization(uv_coord)
-        sinn = np.array(si.n).transpose(1, 0)[::1023]
-        sinp = np.array(si.p).transpose(1, 0)[::1023]
-        if sinp.shape[0] == film.size()[0]*film.size()[1] and not self.saved:
-            print('Wall Sampling')
-            self.saved = True
-            np.save("wallsinp.npy", sinp)
-            if sinn.shape != sinp.shape:
-                sinn = sinn.repeat(sinp.shape[0], axis = 0)
-            np.save("wallsinn.npy", sinn)
         
         # 5. Handle invalid UVs (if mesh doesn't cover [0,1])
         valid_uv = si.is_valid()

@@ -89,9 +89,8 @@ class Retroreflector(mi.BSDF):
         # PDF of the sampled direction
         pdf = (self.m_exponent + 1.0) / (2.0 * dr.pi) * dr.power(cos_theta, self.m_exponent)
 
-        # BSDF value (Phong-like lobe around wi)
-        # f = reflectance * (n+2)/(2*pi) * cos^n(theta) / cos_theta_o
-        # But we return f * cos_theta_o / pdf = reflectance * (n+2)/(n+1)
+        # Raw BSDF value (Phong-like lobe around wi). Mitsuba's sampling
+        # weight convention is f * cos(theta_o) / pdf.
         cos_wi_wo = dr.dot(si.wi, wo)
         cos_wi_wo = dr.maximum(cos_wi_wo, 0.0)
 
@@ -131,7 +130,11 @@ class Retroreflector(mi.BSDF):
 
         # Phong-like lobe centered on wi
         normalization = (self.m_exponent + 2.0) / (2.0 * dr.pi)
-        value = self.m_reflectance * mi.Spectrum(normalization * dr.power(cos_wi_wo, self.m_exponent))
+        value = self.m_reflectance * mi.Spectrum(
+            normalization
+            * dr.power(cos_wi_wo, self.m_exponent)
+            * cos_theta_o
+        )
 
         return dr.select(active, value, mi.Spectrum(0.0))
 
@@ -170,7 +173,11 @@ class Retroreflector(mi.BSDF):
 
         # BSDF value
         normalization = (self.m_exponent + 2.0) / (2.0 * dr.pi)
-        value = self.m_reflectance * mi.Spectrum(normalization * dr.power(cos_wi_wo, self.m_exponent))
+        value = self.m_reflectance * mi.Spectrum(
+            normalization
+            * dr.power(cos_wi_wo, self.m_exponent)
+            * cos_theta_o
+        )
 
         # PDF
         pdf = (self.m_exponent + 1.0) / (2.0 * dr.pi) * dr.power(cos_wi_wo, self.m_exponent)

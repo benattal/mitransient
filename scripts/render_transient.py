@@ -25,6 +25,12 @@ def parse_args() -> argparse.Namespace:
         help="Samples per pixel (default: 100000)",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Deterministic Mitsuba render seed (default: 0)",
+    )
+    parser.add_argument(
         "--clip-max",
         type=float,
         default=10.0,
@@ -123,7 +129,7 @@ def main() -> None:
         print("Warning: Integrator does not support pixel_filter parameter")
 
     print(f"Rendering with {args.spp} samples per pixel...")
-    data_steady, data_transient = mi.render(scene, spp=args.spp)
+    data_steady, data_transient = mi.render(scene, spp=args.spp, seed=args.seed)
 
     print("Rendering complete!")
     print(f"Steady shape: {data_steady.shape}")

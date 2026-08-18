@@ -7,6 +7,40 @@ import mitsuba as mi
 import numpy as np
 
 
+def projector_sample_geometry_terms(
+    source_position: mi.Point3f,
+    source_normal: mi.Normal3f,
+    hidden_position: mi.Point3f,
+    projector_direction: mi.Vector3f,
+    tan_half_fov: mi.Float,
+):
+    """Geometry/PDF-conversion terms used by :meth:`sample_emitter`.
+
+    Kept as a small public diagnostic seam so the inverse operator can compare
+    identical deterministic paths term by term instead of merely fitting the
+    final rendered transient.
+    """
+    to_light = source_position - hidden_position
+    distance = dr.norm(to_light)
+    to_light_normalized = dr.normalize(to_light)
+    cos_theta_projector = dr.abs(dr.dot(source_normal, -projector_direction))
+    d_area = (tan_half_fov * tan_half_fov) / dr.maximum(
+        cos_theta_projector, 1e-6
+    )
+    cos_theta_vertex = dr.abs(dr.dot(source_normal, -to_light_normalized))
+    d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(
+        distance * distance, 1e-3
+    )
+    return (
+        distance,
+        to_light_normalized,
+        cos_theta_projector,
+        cos_theta_vertex,
+        d_area,
+        d_omega_vertex,
+    )
+
+
 class ConfocalProjector(mi.Emitter):
     r"""
     .. emitter-confocal_projector:
@@ -265,11 +299,16 @@ class ConfocalProjector(mi.Emitter):
         self.spot_sigmas = mi.Float(sigmas)
         self.spot_intensities = mi.Color3f(intensities[:, 0], intensities[:, 1], intensities[:, 2])
 
-        # Compute PMF and CDF for spot selection
-        # Integral of 2D Gaussian = 2 * pi * sigma^2 * amplitude
-        integrated = intensities[:, 0]
+        # Compute a wavelength-independent PMF from all color channels. Each
+        # Gaussian is normalized, so its integrated RGB energy is its amplitude.
+        integrated = np.mean(intensities, axis=1)
         total = np.sum(integrated)
-        pmf = integrated / np.maximum(total, 1e-10)
+        if total > 0:
+            pmf = integrated / total
+        else:
+            # The pattern contributes zero regardless of which component is
+            # sampled. Keep the proposal valid and avoid a zero CDF/PDF.
+            pmf = np.full(self.num_spots, 1.0 / self.num_spots)
         self.spot_cdf = mi.Float(np.cumsum(pmf))
         self.spot_pmf = mi.Float(pmf)
 
@@ -310,9 +349,9 @@ class ConfocalProjector(mi.Emitter):
 
         Returns:
             spot_idx: Index of sampled spot
-            sample_x: X coordinate sampled from the Gaussian (clamped to [-1, 1])
-            sample_y: Y coordinate sampled from the Gaussian (clamped to [-1, 1])
-            pdf: PDF of the sample (spot selection * Gaussian pdf)
+            sample_x: X coordinate sampled from the Gaussian
+            sample_y: Y coordinate sampled from the Gaussian
+            pdf: Marginal PDF of the Gaussian mixture at the sample
         """
         xi = sampler.next_1d()
         spot_idx = dr.clip(
@@ -334,14 +373,25 @@ class ConfocalProjector(mi.Emitter):
         sample_x = cx + r * dr.cos(theta)
         sample_y = cy + r * dr.sin(theta)
 
-        # Final clamp for any remaining outliers
-        sample_x = dr.clip(sample_x, -1.0, 1.0)
-        sample_y = dr.clip(sample_y, -1.0, 1.0)
-
-        # PDF: P(spot) * P(position|spot)
-        spot_pmf = dr.gather(mi.Float, self.spot_pmf, spot_idx)
-        gaussian_pdf = dr.rcp(2.0 * dr.pi * sigma * sigma)
-        pdf = spot_pmf * gaussian_pdf
+        # The proposal is a mixture, so its marginal density must sum every
+        # component. Using only the selected component overweights samples in
+        # overlap regions and makes equivalent split/merged spot patterns
+        # render at different brightness. Samples are deliberately not
+        # clamped: clamping a continuous Gaussian creates unmodelled point
+        # masses at the FOV boundary.
+        pdf = mi.Float(0.0)
+        for i in range(self.num_spots):
+            idx = mi.UInt32(i)
+            cx_i = dr.gather(mi.Float, self.spot_positions_x, idx)
+            cy_i = dr.gather(mi.Float, self.spot_positions_y, idx)
+            sigma_i = dr.gather(mi.Float, self.spot_sigmas, idx)
+            pmf_i = dr.gather(mi.Float, self.spot_pmf, idx)
+            dx = sample_x - cx_i
+            dy = sample_y - cy_i
+            gaussian_i = dr.exp(-(dx * dx + dy * dy) /
+                                (2.0 * sigma_i * sigma_i)) \
+                * dr.rcp(2.0 * dr.pi * sigma_i * sigma_i)
+            pdf += pmf_i * gaussian_i
 
         return spot_idx, sample_x, sample_y, pdf
 
@@ -496,9 +546,20 @@ class ConfocalProjector(mi.Emitter):
         dist_projector = dr.norm(si_projector.p - projector_origin)
 
         # Direction from current vertex to the illuminated point
-        to_light = si_projector.p - si.p
-        dist = dr.norm(to_light)
-        to_light_normalized = dr.normalize(to_light)
+        (
+            dist,
+            to_light_normalized,
+            cos_theta_projector,
+            cos_theta_vertex,
+            d_area,
+            d_omega_vertex,
+        ) = projector_sample_geometry_terms(
+            si_projector.p,
+            si_projector.n,
+            si.p,
+            direction_world,
+            tan_half_fov,
+        )
 
         # Check visibility from current vertex to illuminated point
         shadow_ray = mi.Ray3f(si.p + to_light_normalized * 1e-4, to_light_normalized)
@@ -517,14 +578,6 @@ class ConfocalProjector(mi.Emitter):
         # Compute geometry terms for PDF conversion
         # We sampled in projector's image plane solid angle, need to convert to
         # the solid angle as seen from the current vertex
-
-        # Solid angle element in projector space
-        cos_theta_projector = dr.abs(dr.dot(si_projector.n, -direction_world))
-        d_area = (tan_half_fov * tan_half_fov) / dr.maximum(cos_theta_projector, 1e-6)
-
-        # Convert to solid angle at current vertex
-        cos_theta_vertex = dr.abs(dr.dot(si_projector.n, -to_light_normalized))
-        d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(dist * dist, 1e-3)
 
         # Weight includes: radiance / pdf * geometry
         pdf_weight = dr.clip(d_omega_vertex / dr.maximum(sample_pdf, 1e-10), 0.0, 10000.0)

@@ -1,3 +1,6 @@
+import pytest
+
+
 def integrator():
     return {
         'type': 'transient_nlos_path',
@@ -11,10 +14,11 @@ def integrator():
 
 
 def Z():
+    from pathlib import Path
     from mitsuba import ScalarTransform4f as T
     return {
         'type': 'obj',
-        'filename': 'examples/transient-nlos/Z.obj',
+        'filename': str(Path(__file__).resolve().parents[2] / 'examples' / 'transient-nlos' / 'Z.obj'),
         'bsdf': {
             'type': 'diffuse',
             'reflectance': {
@@ -78,6 +82,7 @@ def relay_wall(sensor):
     }
 
 
+@pytest.mark.slow
 def test00_Z_single():
     import drjit as dr
     import mitsuba as mi
@@ -103,16 +108,12 @@ def test00_Z_single():
         laser_obj)
 
     transient_integrator = scene.integrator()
-    transient_integrator.prepare_transient(scene, sensor=0)
 
-    # Render the scene and develop the data
+    # ``render`` owns film/sampler preparation in the current integrator API.
     data_steady, data_transient = transient_integrator.render(scene)
     # And evaluate the output to launch the corresponding kernel
     dr.eval(data_steady, data_transient)
 
-    # FIXME the data is transposed when comparing steady and transient
-    # TAL expects (sx, sy) format for data_transient, does not care about
-    # data_steady
-    # maybe this is just not a problem
+    # Both outputs use NumPy's row-major (height, width, ...) convention.
     assert data_steady.shape == (sy, sx, 3)
-    assert data_transient.shape == (sx, sy, 300, 3)
+    assert data_transient.shape == (sy, sx, 300, 3)

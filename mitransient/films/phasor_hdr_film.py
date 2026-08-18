@@ -203,7 +203,10 @@ class PhasorHDRFilm(mi.Film):
         return len(self.channels)
 
     def clear(self):
-        self.storage.clear()
+        if hasattr(self, "steady"):
+            self.steady.clear()
+        if hasattr(self, "phasors"):
+            self.phasors.clear()
 
     def develop(self, raw: bool = False):
         steady_image = self.steady.develop(raw=raw)

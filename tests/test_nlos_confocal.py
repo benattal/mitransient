@@ -1,17 +1,12 @@
 import mitsuba as mi
-import drjit as dr
 import pytest
-import sys
-import os
 
-# Add the parent directory to the path so we can import mitransient
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-try:
+if mi.variant() is None:
     mi.set_variant('cuda_ad_rgb', 'llvm_ad_rgb')
-except Exception:
-    pass
 
+import mitransient  # noqa: E402,F401 -- register plugins for the active variant
+
+@pytest.mark.slow
 def test_nlos_confocal_rendering():
     """
     Test that the transient_nlos_path integrator can be instantiated with
@@ -29,26 +24,13 @@ def test_nlos_confocal_rendering():
             "use_nlos_only": True,
             "temporal_filter": "box",
         },
-        "sensor": {
-            "type": "nlos_capture_meter",
-            "sensor_origin": [0, 0, 0],
-            "laser_origin": [0, 0, 0],
-            "laser_lookat_pixel": [16, 16, 0],
-            "film": {
-                "type": "transient_hdr_film",
-                "width": 32,
-                "height": 32,
-                "temporal_bins": 10,
-                "start_opl": 0.0,
-                "bin_width_opl": 0.1,
-                "rfilter": {
-                    "type": "box"
-                }
-            },
-            "sampler": {
-                "type": "independent",
-                "sample_count": 1
-            }
+        # Laser sampling requires one emitter aimed along local +Z. This
+        # projector starts at the origin and intersects the relay wall.
+        "laser": {
+            "type": "projector",
+            "to_world": mi.ScalarTransform4f.translate([0, 0, 0]),
+            "irradiance": {"type": "rgb", "value": [1, 1, 1]},
+            "fov": 0.2,
         },
         # Relay wall
         "wall": {
@@ -56,6 +38,23 @@ def test_nlos_confocal_rendering():
             "to_world": mi.ScalarTransform4f.translate([0, 0, 2]).scale(2),
             "bsdf": {
                 "type": "diffuse"
+            },
+            "sensor": {
+                "type": "nlos_capture_meter",
+                "sensor_origin": [0, 0, 0],
+                "film": {
+                    "type": "transient_hdr_film",
+                    "width": 32,
+                    "height": 32,
+                    "temporal_bins": 10,
+                    "start_opl": 0.0,
+                    "bin_width_opl": 0.1,
+                    "rfilter": {"type": "box"}
+                },
+                "sampler": {
+                    "type": "independent",
+                    "sample_count": 1
+                }
             }
         },
         # Hidden object
