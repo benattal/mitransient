@@ -86,7 +86,7 @@ def relay_wall(sensor):
 def test00_Z_single():
     import drjit as dr
     import mitsuba as mi
-    mi.set_variant('llvm_ad_rgb')
+    mi.set_variant('cuda_ad_rgb', 'llvm_ad_rgb')
     import mitransient as mitr
     sx, sy = 4, 2
     relay_wall_obj = mi.load_dict(relay_wall(

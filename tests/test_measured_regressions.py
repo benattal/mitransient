@@ -5,7 +5,7 @@ import drjit as dr
 import mitsuba as mi
 
 
-mi.set_variant("llvm_ad_rgb")
+mi.set_variant("cuda_ad_rgb", "llvm_ad_rgb")
 
 import mitransient  # noqa: E402,F401 -- registers the plugins for this variant
 from mitransient.integrators.transientpath import TransientPath  # noqa: E402
