@@ -9,6 +9,9 @@ mi.set_variant("cuda_ad_rgb", "llvm_ad_rgb")
 
 import mitransient  # noqa: E402,F401 -- registers the plugins for this variant
 from mitransient.integrators.transientpath import TransientPath  # noqa: E402
+from mitransient.emitters.confocal_projector import (  # noqa: E402
+    projector_source_falloff,
+)
 from mitransient.pulses.histogram_pulse import HistogramPulse  # noqa: E402
 from mitransient.render.transient_image_block import TransientImageBlock  # noqa: E402
 
@@ -73,6 +76,15 @@ def test_projector_pmf_uses_all_rgb_channels():
         "is_confocal": True,
     })
     np.testing.assert_allclose(_as_numpy(projector.spot_pmf), [0.5, 0.5])
+
+
+def test_projector_source_leg_has_inverse_square_falloff():
+    distance = mi.Float([1.0, 2.0, 4.0])
+    np.testing.assert_allclose(
+        _as_numpy(projector_source_falloff(distance)),
+        [1.0, 0.25, 0.0625],
+        rtol=1e-6,
+    )
 
 
 def test_zero_energy_projector_has_valid_proposal():

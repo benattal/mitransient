@@ -7,6 +7,14 @@ import mitsuba as mi
 import numpy as np
 
 
+def projector_source_falloff(distance: mi.Float) -> mi.Float:
+    """Inverse-square projector-origin to relay falloff used by every path."""
+    return dr.minimum(
+        dr.rcp(dr.maximum(distance * distance, 1e-3)),
+        10000.0,
+    )
+
+
 def projector_sample_geometry_terms(
     source_position: mi.Point3f,
     source_normal: mi.Normal3f,
@@ -474,7 +482,7 @@ class ConfocalProjector(mi.Emitter):
         projector_radiance = self.eval_pattern(normalized_x, normalized_y)
 
         # Apply inverse square falloff
-        falloff = dr.minimum(dr.rcp(dr.maximum(dist * dist, 1e-3)), 10000.0)
+        falloff = projector_source_falloff(dist)
 
         # Create direction sample pointing toward projector
         ds = dr.zeros(mi.DirectionSample3f)
@@ -544,6 +552,7 @@ class ConfocalProjector(mi.Emitter):
         # Find intersection from projector
         si_projector = scene.ray_intersect(mi.Ray3f(projector_origin, direction_world), active)
         dist_projector = dr.norm(si_projector.p - projector_origin)
+        source_falloff = projector_source_falloff(dist_projector)
 
         # Direction from current vertex to the illuminated point
         (
@@ -592,7 +601,7 @@ class ConfocalProjector(mi.Emitter):
 
         em_weight = dr.select(
             is_visible & active & si_projector.is_valid(),
-            projector_radiance * bsdf_value * pdf_weight,
+            projector_radiance * bsdf_value * pdf_weight * source_falloff,
             mi.Spectrum(0.0)
         )
         return ds, em_weight
