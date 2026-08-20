@@ -451,8 +451,17 @@ class ConfocalProjector(mi.Emitter):
             ds: Direction sample toward the projector
             em_weight: Weight including radiance with inverse square falloff
         """
-        # Get rotation matrices and origin: use stored or build dynamically for confocal mode
-        if not self.is_confocal and self.rotation is not None:
+        # Get the projector origin. For a confocal initial hit, the projector
+        # frame is defined around this exact camera ray, so the hit lies at
+        # normalized projector coordinate (0, 0) by construction. Rebuilding
+        # that coordinate through a floating-point frame transform introduces
+        # ~1e-5 cancellation error, which is catastrophic for delta-like
+        # sigma=1e-6 spots (hundreds of Gaussian standard deviations).
+        if self.is_confocal:
+            projector_origin = camera_origin
+            normalized_x = mi.Float(0.0)
+            normalized_y = mi.Float(0.0)
+        elif self.rotation is not None:
             rotation_inv = self.rotation_inv
             projector_origin = self.origin
         else:
@@ -463,20 +472,21 @@ class ConfocalProjector(mi.Emitter):
                 # Up vector is the second column (y-axis) of the rotation part
                 m = to_world.matrix
                 camera_up = mi.Vector3f(m[0, 1], m[1, 1], m[2, 1])
-            _, rotation_inv, projector_origin = self.build_frame(camera_origin, camera_ray_direction, camera_up)
+            _, rotation_inv, projector_origin = self.build_frame(
+                camera_origin, camera_ray_direction, camera_up
+            )
 
         # Direction from intersection point to projector
         to_projector = projector_origin - si.p
         dist = dr.norm(to_projector)
         to_projector_normalized = dr.normalize(to_projector)
 
-        # Transform direction to projector local space using rotation_inv (world-to-local)
-        direction_local = rotation_inv @ (-to_projector_normalized)
-
-        # Convert to normalized coordinates [-1, 1]
-        tan_half_fov = dr.tan(self.fov / 2.0)
-        normalized_x = direction_local.x / (-direction_local.z * tan_half_fov)
-        normalized_y = direction_local.y / (-direction_local.z * tan_half_fov)
+        if not self.is_confocal:
+            # Transform direction to projector local space (world-to-local).
+            direction_local = rotation_inv @ (-to_projector_normalized)
+            tan_half_fov = dr.tan(self.fov / 2.0)
+            normalized_x = direction_local.x / (-direction_local.z * tan_half_fov)
+            normalized_y = direction_local.y / (-direction_local.z * tan_half_fov)
 
         # Query parametric projector (Gaussian mixture)
         projector_radiance = self.eval_pattern(normalized_x, normalized_y)

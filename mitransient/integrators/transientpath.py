@@ -492,14 +492,26 @@ class TransientPath(TransientADIntegrator):
             Lr_dir = β * bsdf_value_em * em_weight
 
             if self.filter_direct and is_initial_intersection:
-                is_directly_visible = self._is_directly_visible(scene, si, camera_origin)
-                Lr_dir = dr.select(is_directly_visible, mi.Spectrum(0.0), Lr_dir)
-                L = dr.select(is_directly_visible, mi.Spectrum(0.0), L)
+                # The camera ray's first valid intersection is directly
+                # visible by construction. Re-tracing a visibility ray here
+                # is both redundant and numerically unstable at silhouettes:
+                # a neighboring primitive can win the second intersection
+                # query and leak a direct-return pixel into an indirect-only
+                # capture. Remove the depth-zero contribution exactly.
+                Lr_dir = mi.Spectrum(0.0)
+                L = mi.Spectrum(0.0)
 
             if self.use_nlos_only:
-                has_hit_nlos_point, Lr_dir, L = self._apply_nlos_filter(
-                    scene, si, camera_origin, has_hit_nlos_point, Lr_dir, L
-                )
+                if is_initial_intersection:
+                    # As above, depth zero is necessarily camera-visible. Do
+                    # not let a silhouette visibility re-test classify it as
+                    # the first hidden/NLOS interaction.
+                    Lr_dir = mi.Spectrum(0.0)
+                    L = mi.Spectrum(0.0)
+                else:
+                    has_hit_nlos_point, Lr_dir, L = self._apply_nlos_filter(
+                        scene, si, camera_origin, has_hit_nlos_point, Lr_dir, L
+                    )
 
             # Add contribution from direct emitter sampling with pulse sampling
             path_distance = distance + ds.dist * η

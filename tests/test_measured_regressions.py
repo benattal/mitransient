@@ -149,7 +149,7 @@ def test_all_zero_histogram_pulse_samples_zero_weight():
     )
 
 
-def _make_one_bounce_projector_scene(integrator_type, spp):
+def _make_one_bounce_projector_scene(integrator_type, spp, **integrator_overrides):
     transform = mi.ScalarTransform4f
     integrator = {
         "type": integrator_type,
@@ -167,6 +167,7 @@ def _make_one_bounce_projector_scene(integrator_type, spp):
     }
     if integrator_type == "timegated_transient_path":
         integrator["time_sampling"] = "random"
+    integrator.update(integrator_overrides)
 
     return mi.load_dict({
         "type": "scene",
@@ -210,3 +211,37 @@ def test_timegated_energy_matches_single_projector_estimator():
 
     ratio = energy["timegated_transient_path"] / energy["transient_path"]
     assert ratio == pytest.approx(1.0, rel=0.03)
+
+
+@pytest.mark.parametrize("flag", ["filter_direct", "use_nlos_only"])
+def test_depth_zero_path_family_filters_are_exact(flag):
+    scene = _make_one_bounce_projector_scene(
+        "transient_path", 256, **{flag: True}
+    )
+    steady, transient = mi.render(scene, spp=256, seed=11)
+    dr.eval(steady, transient)
+    np.testing.assert_allclose(np.asarray(steady), 0.0, atol=0.0)
+    np.testing.assert_allclose(np.asarray(transient), 0.0, atol=0.0)
+
+
+def test_confocal_direct_query_is_exactly_at_spot_center():
+    scene = _make_one_bounce_projector_scene("transient_path", 1)
+    sensor = scene.sensors()[0]
+    projector = scene.integrator().confocal_projector
+    sample = mi.Point2f(
+        mi.Float([0.1, 0.3, 0.7, 0.9]),
+        mi.Float([0.2, 0.8, 0.4, 0.6]),
+    )
+    rays, _ = sensor.sample_ray(
+        mi.Float(0.0), mi.Float(0.0), sample, mi.Point2f(0.5, 0.5)
+    )
+    si = scene.ray_intersect(rays)
+    _ds, weight = projector.query_direct(
+        scene, si, rays.o, rays.d, si.is_valid()
+    )
+    distance = dr.norm(rays.o - si.p)
+    expected = projector.eval_pattern(mi.Float(0.0), mi.Float(0.0))
+    expected *= projector_source_falloff(distance)
+    np.testing.assert_allclose(
+        np.asarray(weight), np.asarray(expected), rtol=2e-6, atol=0.0
+    )
