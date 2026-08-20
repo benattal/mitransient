@@ -10,6 +10,7 @@ mi.set_variant("cuda_ad_rgb", "llvm_ad_rgb")
 import mitransient  # noqa: E402,F401 -- registers the plugins for this variant
 from mitransient.integrators.transientpath import TransientPath  # noqa: E402
 from mitransient.emitters.confocal_projector import (  # noqa: E402
+    projector_sample_geometry_terms,
     projector_source_falloff,
 )
 from mitransient.pulses.histogram_pulse import HistogramPulse  # noqa: E402
@@ -245,3 +246,17 @@ def test_confocal_direct_query_is_exactly_at_spot_center():
     np.testing.assert_allclose(
         np.asarray(weight), np.asarray(expected), rtol=2e-6, atol=0.0
     )
+
+
+def test_projector_surface_area_jacobian_scales_with_fixed_leg_squared():
+    source = mi.Point3f(0.0, 0.0, 0.0)
+    normal = mi.Normal3f(0.0, 0.0, -1.0)
+    hidden = mi.Point3f(0.0, 0.0, -1.0)
+    direction = mi.Vector3f(0.0, 0.0, 1.0)
+    near = projector_sample_geometry_terms(
+        source, normal, hidden, direction, mi.Float(1.0), mi.Float(0.1)
+    )[4]
+    far = projector_sample_geometry_terms(
+        source, normal, hidden, direction, mi.Float(2.0), mi.Float(0.1)
+    )[4]
+    np.testing.assert_allclose(_as_numpy(far / near), 4.0, rtol=1e-6)

@@ -20,6 +20,7 @@ def projector_sample_geometry_terms(
     source_normal: mi.Normal3f,
     hidden_position: mi.Point3f,
     projector_direction: mi.Vector3f,
+    projector_distance: mi.Float,
     tan_half_fov: mi.Float,
 ):
     """Geometry/PDF-conversion terms used by :meth:`sample_emitter`.
@@ -32,8 +33,16 @@ def projector_sample_geometry_terms(
     distance = dr.norm(to_light)
     to_light_normalized = dr.normalize(to_light)
     cos_theta_projector = dr.abs(dr.dot(source_normal, -projector_direction))
-    d_area = (tan_half_fov * tan_half_fov) / dr.maximum(
-        cos_theta_projector, 1e-6
+    # Convert normalized projector-image area to physical relay-surface area.
+    # The r^2 factor is essential: angular spots cover a physical area that
+    # grows quadratically with projector distance. It cancels the explicit
+    # source inverse-square irradiance when integrating a fixed angular spot.
+    d_area = (
+        tan_half_fov
+        * tan_half_fov
+        * projector_distance
+        * projector_distance
+        / dr.maximum(cos_theta_projector, 1e-6)
     )
     cos_theta_vertex = dr.abs(dr.dot(source_normal, -to_light_normalized))
     d_omega_vertex = d_area * cos_theta_vertex / dr.maximum(
@@ -577,6 +586,7 @@ class ConfocalProjector(mi.Emitter):
             si_projector.n,
             si.p,
             direction_world,
+            dist_projector,
             tan_half_fov,
         )
 
@@ -590,6 +600,12 @@ class ConfocalProjector(mi.Emitter):
         wo_projector = si_projector.to_local(-to_light_normalized)
         bsdf_value = si_projector.bsdf().eval(bsdf_ctx, si_projector, wo_projector, active)
         bsdf_value = si_projector.to_world_mueller(bsdf_value, -wo_projector, si_projector.wi)
+        # Mitsuba BSDF.eval includes |cos(theta_out)| toward the hidden
+        # vertex. The source-area -> hidden-solid-angle Jacobian below also
+        # contains that cosine, while projector irradiance needs
+        # |cos(theta_in)|. Replace the duplicated outgoing cosine by the
+        # projector-incidence cosine.
+        bsdf_value *= cos_theta_projector / dr.maximum(cos_theta_vertex, 1e-6)
 
         # Get projector radiance at the sampled point
         projector_radiance = self.eval_pattern(normalized_x, normalized_y)
