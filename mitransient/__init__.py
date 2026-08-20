@@ -24,6 +24,10 @@ except ImportError:
 from .version import check_compatibility, __version__
 check_compatibility()
 
+# Optional shared-node CPU thread cap (NLOS_MAX_THREADS); see thread_limits.py.
+from .thread_limits import apply_thread_limits
+apply_thread_limits()
+
 # Import all the subpackages of mitransient
 from .integrators import *
 from .render import *
