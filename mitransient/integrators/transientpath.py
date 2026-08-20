@@ -107,7 +107,9 @@ class TransientPath(TransientADIntegrator):
         self.wall_name = props.get("wall_name", "elm__4")
         self.wall_id = -1
         self.hidden_shape_name = props.get("hidden_shape_name", "")
+        self.hidden_shape_prefix = props.get("hidden_shape_prefix", "")
         self.hidden_shape = None
+        self.hidden_shapes = []
 
     def _is_directly_visible(self,
                              scene: mi.Scene,
@@ -300,6 +302,17 @@ class TransientPath(TransientADIntegrator):
                         f"got {len(matches)} matches for {self.hidden_shape_name!r}"
                     )
                 self.hidden_shape = matches[0]
+                self.hidden_shapes = matches
+            elif self.hidden_shape_prefix:
+                self.hidden_shapes = [
+                    shape for shape in scene.shapes()
+                    if shape.id().startswith(self.hidden_shape_prefix)
+                ]
+                if not self.hidden_shapes:
+                    raise RuntimeError(
+                        "hidden_shape_prefix must identify at least one scene shape; "
+                        f"got no matches for {self.hidden_shape_prefix!r}"
+                    )
             for i, (sampler_i, spp_i) in enumerate(samplers_spps):
                 # Generate a set of rays starting at the sensor
                 if self.wall_sample:
@@ -445,11 +458,14 @@ class TransientPath(TransientADIntegrator):
             # Is emitter sampling even possible on the current vertex?
             active_em = active_next & mi.has_flag(
                 bsdf.flags(), mi.BSDFFlags.Smooth)
-            if dr.hint(self.hidden_shape is not None, mode="scalar"):
+            if dr.hint(bool(self.hidden_shapes), mode="scalar"):
                 # Keep only camera -> relay -> named-hidden-object ->
                 # relay/projector paths. A folded relay can otherwise be hit
                 # again at depth one and contaminate an NLOS validation capture.
-                active_em &= (depth != 1) | (si.shape == self.hidden_shape)
+                is_hidden = mi.Bool(False)
+                for hidden_shape in self.hidden_shapes:
+                    is_hidden |= si.shape == hidden_shape
+                active_em &= (depth != 1) | is_hidden
 
             # Check if this is the initial intersection point (depth == 0)
             is_initial_intersection = (depth == 0)

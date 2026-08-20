@@ -87,6 +87,14 @@ def test_projector_source_leg_has_inverse_square_falloff():
     )
 
 
+def test_transient_path_retains_hidden_shape_prefix_configuration():
+    properties = mi.Properties("transient_path")
+    properties["hidden_shape_prefix"] = "hidden_target_"
+    integrator = TransientPath(properties)
+    assert integrator.hidden_shape_prefix == "hidden_target_"
+    assert integrator.hidden_shapes == []
+
+
 def test_zero_energy_projector_has_valid_proposal():
     projector = mi.load_dict({
         "type": "confocal_projector",

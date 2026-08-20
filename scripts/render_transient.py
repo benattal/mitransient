@@ -80,6 +80,14 @@ def parse_args() -> argparse.Namespace:
         choices=["box", "delta"],
         help="Pixel filter mode: box keeps subpixel jitter, delta point-samples at pixel centers (default: box)",
     )
+    parser.add_argument(
+        "--preserve-shape-ids",
+        action="store_true",
+        help=(
+            "Disable Mitsuba's compatible-mesh merge so integrator shape-id "
+            "filters remain exact."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -102,7 +110,19 @@ def main() -> None:
         raise FileNotFoundError(f"Scene file not found: {scene_path}")
 
     print(f"Loading scene from: {scene_path}")
-    scene = mi.load_file(scene_path)
+    if args.preserve_shape_ids:
+        config = mi.parser.ParserConfig(args.variant)
+        config.merge_meshes = False
+        previous_cwd = os.getcwd()
+        try:
+            os.chdir(os.path.dirname(scene_path))
+            state = mi.parser.parse_file(config, scene_path)
+            mi.parser.transform_all(config, state)
+            scene = mi.parser.instantiate(config, state)
+        finally:
+            os.chdir(previous_cwd)
+    else:
+        scene = mi.load_file(scene_path)
     print("Scene loaded successfully!")
 
     params = mi.traverse(scene)
