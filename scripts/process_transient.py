@@ -14,6 +14,12 @@ def parse_args() -> argparse.Namespace:
         choices=("auto", "cuda", "cpu"),
         help="Device used for RGB reduction (production runs pass CUDA explicitly)",
     )
+    parser.add_argument(
+        "--channel",
+        choices=("sum", "red", "green", "blue"),
+        default="sum",
+        help="Reduce RGB using a matched acquisition channel or the RGB sum.",
+    )
     return parser.parse_args()
 
 
@@ -32,7 +38,12 @@ def main() -> None:
 
     path = Path(args.scene_file)
     transient = torch.from_numpy(np.load(path)).to(device)
-    reduced = transient.sum(dim=-1)
+    channel_index = {"red": 0, "green": 1, "blue": 2}
+    reduced = (
+        transient.sum(dim=-1)
+        if args.channel == "sum"
+        else transient[..., channel_index[args.channel]]
+    )
     transformed = reduced.reshape(-1, reduced.shape[-1]).cpu().numpy()
 
     output_path = path.parent / f"{path.stem}_processed.npy"
