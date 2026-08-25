@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import sys
 from pathlib import Path
@@ -81,6 +82,15 @@ def parse_args() -> argparse.Namespace:
         help="Pixel filter mode: box keeps subpixel jitter, delta point-samples at pixel centers (default: box)",
     )
     parser.add_argument(
+        "--spp-per-pass",
+        type=int,
+        default=None,
+        help=(
+            "Maximum SPP per render pass. Splits --spp into deterministic "
+            "passes and forms an SPP-weighted average to limit GPU memory."
+        ),
+    )
+    parser.add_argument(
         "--preserve-shape-ids",
         action="store_true",
         help=(
@@ -148,8 +158,43 @@ def main() -> None:
     else:
         print("Warning: Integrator does not support pixel_filter parameter")
 
-    print(f"Rendering with {args.spp} samples per pixel...")
-    data_steady, data_transient = mi.render(scene, spp=args.spp, seed=args.seed)
+    if args.spp_per_pass is None or args.spp_per_pass >= args.spp:
+        print(f"Rendering with {args.spp} samples per pixel...")
+        data_steady, data_transient = mi.render(
+            scene, spp=args.spp, seed=args.seed
+        )
+    else:
+        if args.spp_per_pass < 1:
+            raise ValueError("--spp-per-pass must be positive")
+        num_passes = math.ceil(args.spp / args.spp_per_pass)
+        print(
+            f"Rendering {num_passes} passes with at most "
+            f"{args.spp_per_pass} spp each (total {args.spp} spp)..."
+        )
+        steady_acc = None
+        transient_acc = None
+        completed_spp = 0
+        for pass_index in range(num_passes):
+            pass_spp = min(args.spp_per_pass, args.spp - completed_spp)
+            print(
+                f"  Pass {pass_index + 1}/{num_passes}: {pass_spp} spp...",
+                flush=True,
+            )
+            steady, transient = mi.render(
+                scene, spp=pass_spp, seed=args.seed + pass_index
+            )
+            steady_np = np.asarray(steady, dtype=np.float32)
+            transient_np = np.asarray(transient, dtype=np.float32)
+            if steady_acc is None:
+                steady_acc = steady_np * pass_spp
+                transient_acc = transient_np * pass_spp
+            else:
+                steady_acc += steady_np * pass_spp
+                transient_acc += transient_np * pass_spp
+            completed_spp += pass_spp
+            del steady, transient, steady_np, transient_np
+        data_steady = mi.TensorXf(steady_acc / completed_spp)
+        data_transient = mi.TensorXf(transient_acc / completed_spp)
 
     print("Rendering complete!")
     print(f"Steady shape: {data_steady.shape}")
