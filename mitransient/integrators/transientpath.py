@@ -95,6 +95,14 @@ class TransientPath(TransientADIntegrator):
          Multiple samples reduce variance by spreading contributions across the
          pulse shape. Each sample is weighted by 1/(pulse_samples * pdf).
          (default: 1)
+
+     * - use_bsdf_dc
+       - |bool|
+       - Replace the BSDF during transport by its analytical, view-independent
+         diffuse constant component. For Principled materials this is
+         ``base_color * (1 - metallic) * (1 - spec_trans) / pi``. The cosine
+         factor remains part of path transport. (default: false)
+
     """
 
     def __init__(self, props: mi.Properties):
@@ -104,12 +112,72 @@ class TransientPath(TransientADIntegrator):
         self.filter_direct = props.get("filter_direct", False)
         self.wall_sample = props.get("wall_sample", False)
         self.pulse_samples = props.get("pulse_samples", 1)
+        self.use_bsdf_dc = props.get("use_bsdf_dc", False)
+        self._bsdf_dc_materials = None
         self.wall_name = props.get("wall_name", "elm__4")
         self.wall_id = -1
         self.hidden_shape_name = props.get("hidden_shape_name", "")
         self.hidden_shape_prefix = props.get("hidden_shape_prefix", "")
         self.hidden_shape = None
         self.hidden_shapes = []
+
+    def _prepare_bsdf_dc_materials(self, scene):
+        """Cache unique scene BSDFs and constant Principled DC weights."""
+        materials = []
+        seen = set()
+        for shape in scene.shapes():
+            material = shape.bsdf()
+            if material is None or material.ptr in seen:
+                continue
+            seen.add(material.ptr)
+            params = mi.traverse(material)
+
+            def constant_attribute(name):
+                matches = [
+                    key for key in params.keys()
+                    if key.endswith(f"{name}.value")
+                ]
+                if len(matches) != 1:
+                    return None
+                value = params[matches[0]]
+                try:
+                    return float(value[0])
+                except (TypeError, IndexError):
+                    return float(value)
+
+            has_metallic = bool(material.has_attribute("metallic"))
+            has_spec_trans = bool(material.has_attribute("spec_trans"))
+            materials.append((
+                material,
+                has_metallic,
+                has_spec_trans,
+                constant_attribute("metallic") if has_metallic else 0.0,
+                constant_attribute("spec_trans") if has_spec_trans else 0.0,
+            ))
+        self._bsdf_dc_materials = materials
+
+    def _eval_bsdf_dc_reflectance(self, bsdf, si, active):
+        """Return rho_DC = base_color * (1-metallic) * (1-spec_trans)."""
+        dc_reflectance = mi.Spectrum(0.0)
+        for material, has_metallic, has_spec_trans, metallic_c, spec_trans_c in \
+                self._bsdf_dc_materials:
+            material_active = active & (bsdf == material)
+            base_color = material.eval_diffuse_reflectance(si, material_active)
+            metallic = (
+                material.eval_attribute_1("metallic", si, material_active)
+                if has_metallic and metallic_c is None else metallic_c
+            )
+            spec_trans = (
+                material.eval_attribute_1("spec_trans", si, material_active)
+                if has_spec_trans and spec_trans_c is None else spec_trans_c
+            )
+            material_weight = (1.0 - metallic) * (1.0 - spec_trans)
+            dc_reflectance = dr.select(
+                material_active,
+                base_color * material_weight,
+                dc_reflectance,
+            )
+        return dc_reflectance
 
     def _is_directly_visible(self,
                              scene: mi.Scene,
@@ -394,8 +462,11 @@ class TransientPath(TransientADIntegrator):
         the role of the various parameters and return values.
         """
 
-        # Standard BSDF evaluation context for path tracing
         bsdf_ctx = mi.BSDFContext()
+        if dr.hint(
+                self.use_bsdf_dc and self._bsdf_dc_materials is None,
+                mode="scalar"):
+            self._prepare_bsdf_dc_materials(scene)
 
         # --------------------- Configure loop state ----------------------
 
@@ -439,6 +510,9 @@ class TransientPath(TransientADIntegrator):
 
             # Get the BSDF
             bsdf = si.bsdf(ray)
+            if dr.hint(self.use_bsdf_dc, mode="scalar"):
+                dc_reflectance = self._eval_bsdf_dc_reflectance(
+                    bsdf, si, active_next & si.is_valid())
 
             # ---------------------- Direct emission ----------------------
 
@@ -486,8 +560,20 @@ class TransientPath(TransientADIntegrator):
 
             # Evaluate BSDF * cos(theta)
             wo = si.to_local(ds.d)
-            bsdf_value_em, bsdf_pdf_em = bsdf.eval_pdf(
-                bsdf_ctx, si, wo, active_em)
+            if dr.hint(self.use_bsdf_dc, mode="scalar"):
+                cos_theta_o = dr.abs(wo.z)
+                same_hemisphere = si.wi.z * wo.z > 0.0
+                dc_active_em = active_em & same_hemisphere
+                bsdf_value_em = dr.select(
+                    dc_active_em,
+                    dc_reflectance * (cos_theta_o * dr.inv_pi),
+                    0.0,
+                )
+                bsdf_pdf_em = dr.select(
+                    dc_active_em, cos_theta_o * dr.inv_pi, 0.0)
+            else:
+                bsdf_value_em, bsdf_pdf_em = bsdf.eval_pdf(
+                    bsdf_ctx, si, wo, active_em)
             bsdf_value_em = si.to_world_mueller(bsdf_value_em, -wo, si.wi)
             Lr_dir = β * bsdf_value_em * em_weight
 
@@ -520,10 +606,29 @@ class TransientPath(TransientADIntegrator):
 
             # ------------------ Detached BSDF sampling -------------------
 
-            bsdf_sample, bsdf_weight = bsdf.sample(bsdf_ctx, si,
-                                                   sampler.next_1d(),
-                                                   sampler.next_2d(),
-                                                   active_next)
+            sample1 = sampler.next_1d()
+            sample2 = sampler.next_2d()
+            if dr.hint(self.use_bsdf_dc, mode="scalar"):
+                bsdf_sample = dr.zeros(mi.BSDFSample3f)
+                bsdf_sample.wo = mi.warp.square_to_cosine_hemisphere(sample2)
+                # Match Mitsuba's two-sided wrapper exactly: on a back-side
+                # interaction it flips the complete local direction, not only
+                # its z component.
+                bsdf_sample.wo = dr.mulsign(bsdf_sample.wo, si.wi.z)
+                bsdf_sample.pdf = dr.abs(bsdf_sample.wo.z) * dr.inv_pi
+                bsdf_sample.eta = 1.0
+                bsdf_sample.sampled_component = 0
+                bsdf_sample.sampled_type = dr.select(
+                    si.wi.z > 0.0,
+                    mi.UInt32(mi.BSDFFlags.DiffuseReflection |
+                              mi.BSDFFlags.FrontSide),
+                    mi.UInt32(mi.BSDFFlags.DiffuseReflection |
+                              mi.BSDFFlags.BackSide),
+                )
+                bsdf_weight = dr.select(active_next, dc_reflectance, 0.0)
+            else:
+                bsdf_sample, bsdf_weight = bsdf.sample(
+                    bsdf_ctx, si, sample1, sample2, active_next)
             bsdf_weight = si.to_world_mueller(
                 bsdf_weight, -bsdf_sample.wo, si.wi)
 
